@@ -6,7 +6,7 @@
   import { ArrowLeft, Download, ExternalLink, GitBranch, Search, User } from '@lucide/svelte';
   import { exportUrl, loadDashboard, loadRepository, type Dashboard, type RepositoryDetail } from './lib/api';
   import { formatPercent, formatStatistic, ordinal, selectedStatistics, type StatisticMetric } from './lib/stats';
-  import { CHART_PALETTES, THEME_OPTIONS, isDarkTheme, isValidTheme, type Theme } from './lib/theme';
+  import { CHART_COLORS } from './lib/theme';
   import { seriesValues, unionDays } from './lib/charts';
 
   let dashboard: Dashboard | null = null;
@@ -18,19 +18,16 @@
   let chart: echarts.ECharts | undefined;
   let detailChart: echarts.ECharts | undefined;
   let metric: StatisticMetric = 'total';
-  const storedTheme = localStorage.getItem('forgepulse-theme');
-  let theme: Theme = isValidTheme(storedTheme) ? storedTheme : 'terminal';
   let selectedRepository = repositoryFromPath();
 
   $: stats = dashboard ? selectedStatistics(metric, dashboard.total_clone_statistics, dashboard.unique_clone_statistics) : null;
   $: if (chartElement && dashboard && !selectedRepository) renderDashboardChart();
   $: if (detailChartElement && detail && selectedRepository) renderRepositoryChart();
-  $: document.documentElement.dataset.theme = theme;
 
   onMount(() => {
     void loadCurrentPage();
     const resize = () => { chart?.resize(); detailChart?.resize(); };
-    const popstate = () => { selectedRepository = repositoryFromPath(); void loadCurrentPage(); };
+    const popstate = () => { disposeCharts(); selectedRepository = repositoryFromPath(); void loadCurrentPage(); };
     window.addEventListener('resize', resize);
     window.addEventListener('popstate', popstate);
     return () => {
@@ -70,7 +67,13 @@
     }
   }
 
+  function disposeCharts() {
+    chart?.dispose(); chart = undefined;
+    detailChart?.dispose(); detailChart = undefined;
+  }
+
   function openRepository(name: string) {
+    disposeCharts();
     selectedRepository = name;
     detail = null;
     history.pushState({}, '', `/repositories/${name.split('/').map(encodeURIComponent).join('/')}`);
@@ -78,6 +81,7 @@
   }
 
   function goHome() {
+    disposeCharts();
     selectedRepository = null;
     detail = null;
     history.pushState({}, '', '/');
@@ -90,12 +94,12 @@
   }
 
   function renderDashboardChart() {
-    chart ??= echarts.init(chartElement, isDarkTheme(theme) ? 'dark' : undefined);
+    chart ??= echarts.init(chartElement, 'dark');
     const clonePoints = dashboard?.chart ?? [];
     const viewPoints = dashboard?.views_chart ?? [];
     const days = unionDays(clonePoints, viewPoints);
     chart.setOption({
-      backgroundColor: 'transparent', color: CHART_PALETTES[theme], tooltip: { trigger: 'axis' },
+      backgroundColor: 'transparent', color: CHART_COLORS, tooltip: { trigger: 'axis' },
       legend: { data: ['Total clones', 'Unique cloners', 'Views', 'Unique viewers'] },
       grid: { left: 42, right: 18, top: 48, bottom: 30 },
       xAxis: { type: 'category', data: days }, yAxis: { type: 'value', minInterval: 1 },
@@ -109,12 +113,12 @@
   }
 
   function renderRepositoryChart() {
-    detailChart ??= echarts.init(detailChartElement, isDarkTheme(theme) ? 'dark' : undefined);
+    detailChart ??= echarts.init(detailChartElement, 'dark');
     const clonePoints = detail?.clones ?? [];
     const viewPoints = detail?.views ?? [];
     const days = unionDays(clonePoints, viewPoints);
     detailChart.setOption({
-      backgroundColor: 'transparent', color: CHART_PALETTES[theme], tooltip: { trigger: 'axis' },
+      backgroundColor: 'transparent', color: CHART_COLORS, tooltip: { trigger: 'axis' },
       legend: { data: ['Clones', 'Unique cloners', 'Views', 'Unique viewers'] },
       grid: { left: 42, right: 18, top: 48, bottom: 30 }, xAxis: { type: 'category', data: days }, yAxis: { type: 'value', minInterval: 1 },
       series: [
@@ -124,14 +128,6 @@
         { name: 'Unique viewers', type: 'line', smooth: true, data: seriesValues(days, viewPoints, 'uniques') }
       ]
     }, true);
-  }
-
-  function applyTheme() {
-    localStorage.setItem('forgepulse-theme', theme);
-    chart?.dispose(); chart = undefined;
-    detailChart?.dispose(); detailChart = undefined;
-    if (dashboard && !selectedRepository) renderDashboardChart();
-    if (detail && selectedRepository) renderRepositoryChart();
   }
 </script>
 
@@ -144,9 +140,6 @@
     <a class="project-link" href="https://github.com/carlok/forgepulse" target="_blank" rel="noreferrer">ForgePulse project<ExternalLink size={13} /></a>
     <div class="sidebar-bottom">
       {#if !selectedRepository}<a class="button" href={exportUrl(query)}><Download size={14} />Export JSONL</a>{/if}
-      <select class="theme-select" bind:value={theme} on:change={applyTheme} aria-label="Theme">
-        {#each THEME_OPTIONS as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
-      </select>
     </div>
   </aside>
   <section class="content">
@@ -161,7 +154,7 @@
           <article in:fly={{ y: 8, duration: 260, delay: 80 }}><span>Total views</span><strong>{detail.summary.total_views}</strong></article>
           <article in:fly={{ y: 8, duration: 260, delay: 120 }}><span>Stars</span><strong>{detail.summary.stars}</strong></article>
         </div>
-        <section class="panel" in:fade={{ duration: 220 }}><div class="panel-title"><div><h2>Traffic over time</h2><span>Stored clone and view history</span></div><span>#{ordinal(detail.summary.clone_rank)} · {formatPercent(detail.summary.clone_share_percent)}</span></div><div class="detail-chart" bind:this={detailChartElement}></div></section>
+        <section class="panel" in:fade={{ duration: 220 }}><div class="panel-title"><div><h2>Traffic over time</h2><span>Stored clone and view history</span></div></div><div class="detail-chart" bind:this={detailChartElement}></div></section>
         <div class="detail-grid"><section class="panel"><div class="panel-title"><h2>Top referrers</h2><span>{detail.referrers.length} stored</span></div><div class="scroll"><table><thead><tr><th>Referrer</th><th>Views</th><th>Unique</th></tr></thead><tbody>{#each detail.referrers as item}<tr><td>{item.referrer}</td><td>{item.count}</td><td>{item.uniques}</td></tr>{:else}<tr><td colspan="3">No referrer snapshots yet.</td></tr>{/each}</tbody></table></div></section><section class="panel"><div class="panel-title"><h2>Popular paths</h2><span>{detail.paths.length} stored</span></div><div class="scroll"><table><thead><tr><th>Path</th><th>Views</th><th>Unique</th></tr></thead><tbody>{#each detail.paths as item}<tr><td title={item.title}>{item.path}</td><td>{item.count}</td><td>{item.uniques}</td></tr>{:else}<tr><td colspan="3">No path snapshots yet.</td></tr>{/each}</tbody></table></div></section></div>
       {:else}<p class="loading">Loading repository history…</p>{/if}
     {:else}

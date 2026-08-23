@@ -3,7 +3,7 @@
 :root { font-family: var(--font-body); color: var(--text-primary); background: var(--color-bg); font-synthesis: none; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--color-bg); }
-button, input, select { font: inherit; }
+button, input { font: inherit; }
 
 main {
   min-height: 100vh;
@@ -14,8 +14,6 @@ main {
   background-image: var(--color-bg-texture);
   transition: background-color var(--transition-base), color var(--transition-base);
 }
-[data-theme='editorial'] main { background-size: 26px 26px, 26px 26px; background-position: 0 0, 13px 13px; }
-[data-theme='geometric'] main { background-size: 22px 22px; }
 
 aside {
   min-height: 100%;
@@ -56,17 +54,6 @@ aside p { font-size: .82rem; line-height: 1.5; color: var(--color-sidebar-text-m
   color: var(--accent-contrast);
 }
 .search button.secondary { background: transparent; color: inherit; border-color: var(--color-border-strong); }
-.theme-select {
-  border: var(--border-width-card) solid var(--color-border-strong);
-  background: transparent;
-  color: inherit;
-  padding: 9px 10px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: .8rem;
-  font-weight: 700;
-}
-.theme-select option { color: #111; }
 .project-link { color: var(--accent); font-size: .78rem; font-weight: 700; text-decoration: none; margin-top: 8px; }
 .project-link:hover, .repository-link:hover { color: var(--accent-strong); text-decoration: underline; }
 
@@ -100,20 +87,6 @@ h2 { font-family: var(--font-display); font-size: .95rem; letter-spacing: -.02em
 .kpis article { padding: calc(15px * var(--space-unit)); display: grid; gap: 6px; }
 .kpis span, .panel-title span, .statistics span, small { color: var(--text-muted); font-size: .72rem; }
 .kpis strong { font-family: var(--font-display); font-size: 1.5rem; letter-spacing: -.04em; }
-
-/* Editorial: a colored top rule marks each section like a magazine department header, and the
-   headline sets in italic — the theme's one deliberate flourish. */
-[data-theme='editorial'] .kpis article, [data-theme='editorial'] .panel { border-top: 3px solid var(--accent); }
-[data-theme='editorial'] h1 { font-style: italic; }
-[data-theme='editorial'] .status { border-radius: var(--radius-pill); }
-
-/* Geometric: heavier display weight than the browser's default bold, and the shadow grows on
-   hover to sell the "lifted sticker" read. */
-[data-theme='geometric'] h1, [data-theme='geometric'] h2, [data-theme='geometric'] .kpis strong { font-weight: 800; }
-[data-theme='geometric'] .kpis, [data-theme='geometric'] .grid { gap: 18px; }
-[data-theme='geometric'] .kpis article, [data-theme='geometric'] .panel { transition: transform var(--transition-base), box-shadow var(--transition-base); }
-[data-theme='geometric'] .kpis article:hover, [data-theme='geometric'] .panel:hover { transform: translate(-2px, -2px); box-shadow: 9px 9px 0 0 var(--color-border); }
-[data-theme='geometric'] .status { background: var(--success); color: #ffffff; border-color: var(--success); }
 
 .grid { display: grid; grid-template-columns: minmax(500px, 1.4fr) minmax(340px, .9fr); gap: 14px; align-items: start; }
 .panel-title, .stats-header { padding: calc(15px * var(--space-unit)) 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: var(--border-width-card) solid var(--color-border-strong); }
@@ -176,7 +149,7 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
   h1 { font-size: 1.7rem; }
   .kpis { grid-template-columns: 1fr 1fr; }
   .search { max-width: none; }
-  .sidebar-bottom .button, .sidebar-bottom .theme-select { font-size: .68rem; padding: 7px; }
+  .sidebar-bottom .button { font-size: .68rem; padding: 7px; }
   .site-footer { flex-direction: column; align-items: flex-start; padding: 12px 15px; }
 }
 
