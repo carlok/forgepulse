@@ -6,21 +6,8 @@
   import { ArrowLeft, Download, ExternalLink, GitBranch, Search, User } from '@lucide/svelte';
   import { exportUrl, loadDashboard, loadRepository, type Dashboard, type RepositoryDetail } from './lib/api';
   import { formatPercent, formatStatistic, ordinal, selectedStatistics, type StatisticMetric } from './lib/stats';
-
-  type Theme = 'terminal' | 'editorial' | 'geometric';
-  const THEMES: { value: Theme; label: string }[] = [
-    { value: 'terminal', label: 'Terminal' },
-    { value: 'editorial', label: 'Editorial' },
-    { value: 'geometric', label: 'Geometric' }
-  ];
-  const CHART_PALETTES: Record<Theme, string[]> = {
-    terminal: ['#f2a93b', '#5fb0d9', '#4ade80', '#f2685c'],
-    editorial: ['#b5502f', '#3f6e91', '#6b8f3f', '#a83b2e'],
-    geometric: ['#2b4bf2', '#ff6b35', '#4c9a2a', '#e2401f']
-  };
-  const isValidTheme = (value: string | null): value is Theme =>
-    value === 'terminal' || value === 'editorial' || value === 'geometric';
-  const isDarkTheme = (value: Theme) => value === 'terminal';
+  import { CHART_PALETTES, THEME_OPTIONS, isDarkTheme, isValidTheme, type Theme } from './lib/theme';
+  import { seriesValues, unionDays } from './lib/charts';
 
   let dashboard: Dashboard | null = null;
   let detail: RepositoryDetail | null = null;
@@ -106,36 +93,35 @@
     chart ??= echarts.init(chartElement, isDarkTheme(theme) ? 'dark' : undefined);
     const clonePoints = dashboard?.chart ?? [];
     const viewPoints = dashboard?.views_chart ?? [];
-    const days = [...new Set([...clonePoints.map((point) => point.day), ...viewPoints.map((point) => point.day)])].sort();
-    const cloneSeries = (key: 'total_clones' | 'unique_cloners') => days.map((day) => clonePoints.find((point) => point.day === day)?.[key] ?? 0);
-    const viewSeries = (key: 'count' | 'uniques') => days.map((day) => viewPoints.find((point) => point.day === day)?.[key] ?? 0);
+    const days = unionDays(clonePoints, viewPoints);
     chart.setOption({
       backgroundColor: 'transparent', color: CHART_PALETTES[theme], tooltip: { trigger: 'axis' },
       legend: { data: ['Total clones', 'Unique cloners', 'Views', 'Unique viewers'] },
       grid: { left: 42, right: 18, top: 48, bottom: 30 },
       xAxis: { type: 'category', data: days }, yAxis: { type: 'value', minInterval: 1 },
       series: [
-        { name: 'Total clones', type: 'line', smooth: true, data: cloneSeries('total_clones'), areaStyle: { opacity: 0.08 } },
-        { name: 'Unique cloners', type: 'line', smooth: true, data: cloneSeries('unique_cloners') },
-        { name: 'Views', type: 'line', smooth: true, data: viewSeries('count') },
-        { name: 'Unique viewers', type: 'line', smooth: true, data: viewSeries('uniques') }
+        { name: 'Total clones', type: 'line', smooth: true, data: seriesValues(days, clonePoints, 'total_clones'), areaStyle: { opacity: 0.08 } },
+        { name: 'Unique cloners', type: 'line', smooth: true, data: seriesValues(days, clonePoints, 'unique_cloners') },
+        { name: 'Views', type: 'line', smooth: true, data: seriesValues(days, viewPoints, 'count') },
+        { name: 'Unique viewers', type: 'line', smooth: true, data: seriesValues(days, viewPoints, 'uniques') }
       ]
     }, true);
   }
 
   function renderRepositoryChart() {
     detailChart ??= echarts.init(detailChartElement, isDarkTheme(theme) ? 'dark' : undefined);
-    const days = [...new Set([...(detail?.clones ?? []), ...(detail?.views ?? [])].map((point) => point.day))].sort();
-    const values = (points: { day: string; count: number; uniques: number }[], key: 'count' | 'uniques') => days.map((day) => points.find((point) => point.day === day)?.[key] ?? 0);
+    const clonePoints = detail?.clones ?? [];
+    const viewPoints = detail?.views ?? [];
+    const days = unionDays(clonePoints, viewPoints);
     detailChart.setOption({
       backgroundColor: 'transparent', color: CHART_PALETTES[theme], tooltip: { trigger: 'axis' },
       legend: { data: ['Clones', 'Unique cloners', 'Views', 'Unique viewers'] },
       grid: { left: 42, right: 18, top: 48, bottom: 30 }, xAxis: { type: 'category', data: days }, yAxis: { type: 'value', minInterval: 1 },
       series: [
-        { name: 'Clones', type: 'line', smooth: true, data: values(detail?.clones ?? [], 'count') },
-        { name: 'Unique cloners', type: 'line', smooth: true, data: values(detail?.clones ?? [], 'uniques') },
-        { name: 'Views', type: 'line', smooth: true, data: values(detail?.views ?? [], 'count') },
-        { name: 'Unique viewers', type: 'line', smooth: true, data: values(detail?.views ?? [], 'uniques') }
+        { name: 'Clones', type: 'line', smooth: true, data: seriesValues(days, clonePoints, 'count') },
+        { name: 'Unique cloners', type: 'line', smooth: true, data: seriesValues(days, clonePoints, 'uniques') },
+        { name: 'Views', type: 'line', smooth: true, data: seriesValues(days, viewPoints, 'count') },
+        { name: 'Unique viewers', type: 'line', smooth: true, data: seriesValues(days, viewPoints, 'uniques') }
       ]
     }, true);
   }
@@ -159,7 +145,7 @@
     <div class="sidebar-bottom">
       {#if !selectedRepository}<a class="button" href={exportUrl(query)}><Download size={14} />Export JSONL</a>{/if}
       <select class="theme-select" bind:value={theme} on:change={applyTheme} aria-label="Theme">
-        {#each THEMES as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
+        {#each THEME_OPTIONS as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
       </select>
     </div>
   </aside>

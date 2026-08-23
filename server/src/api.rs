@@ -387,4 +387,82 @@ mod tests {
         let record: serde_json::Value = serde_json::from_str(lines[0]).expect("jsonl record");
         assert_eq!(record["repository"]["name"], "carlok/alpha");
     }
+
+    #[tokio::test]
+    async fn dashboard_returns_empty_charts_when_nothing_matches() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
+        let store = Store::connect(&database).await.expect("store");
+        store
+            .upsert_repository(&crate::models::Repository {
+                name: "carlok/alpha".into(),
+                description: String::new(),
+                stars: 0,
+                forks: 0,
+                watchers: 0,
+                issues: 0,
+                pull_requests: 0,
+                is_fork: false,
+                is_archived: false,
+                updated_at: "2026-08-01".into(),
+            })
+            .await
+            .expect("repository");
+        let response = router(
+            AppState {
+                store,
+                collector: None,
+            },
+            None,
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/dashboard?q=no-such-repository")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+        assert_eq!(json["total_count"], 0);
+        assert_eq!(json["chart"], serde_json::json!([]));
+        assert_eq!(json["views_chart"], serde_json::json!([]));
+        assert_eq!(json["total_clone_statistics"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn repository_detail_returns_not_found_for_unknown_repository() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
+        let store = Store::connect(&database).await.expect("store");
+        let response = router(
+            AppState {
+                store,
+                collector: None,
+            },
+            None,
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/repositories/carlok/missing")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let json: serde_json::Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+        assert_eq!(json["error"], "Not found");
+    }
 }

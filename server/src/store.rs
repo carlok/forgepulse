@@ -446,6 +446,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn charts_scope_clones_and_views_to_the_given_repositories() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
+        let store = Store::connect(&database).await.expect("connect");
+        for (name, clones, views) in [("carlok/a", 4, 9), ("carlok/b", 6, 1)] {
+            store
+                .upsert_repository(&Repository {
+                    name: name.into(),
+                    description: String::new(),
+                    stars: 0,
+                    forks: 0,
+                    watchers: 0,
+                    issues: 0,
+                    pull_requests: 0,
+                    is_fork: false,
+                    is_archived: false,
+                    updated_at: "2026-08-01".into(),
+                })
+                .await
+                .expect("repository");
+            store
+                .upsert_daily_traffic(name, "2026-08-01", "clone", clones, clones / 2)
+                .await
+                .expect("clone traffic");
+            store
+                .upsert_daily_traffic(name, "2026-08-01", "view", views, views / 3)
+                .await
+                .expect("view traffic");
+        }
+        let summaries = store.repository_summaries("").await.expect("summaries");
+
+        let clone_chart = store.clone_chart(&summaries).await.expect("clone chart");
+        assert_eq!(clone_chart.len(), 1);
+        assert_eq!(clone_chart[0].total_clones, 10);
+        assert_eq!(clone_chart[0].unique_cloners, 5);
+
+        let views_chart = store.views_chart(&summaries).await.expect("views chart");
+        assert_eq!(views_chart.len(), 1);
+        assert_eq!(views_chart[0].count, 10);
+        assert_eq!(views_chart[0].uniques, 3);
+    }
+
+    #[tokio::test]
+    async fn charts_are_empty_for_no_matched_repositories() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
+        let store = Store::connect(&database).await.expect("connect");
+        assert!(store.clone_chart(&[]).await.expect("clone chart").is_empty());
+        assert!(store.views_chart(&[]).await.expect("views chart").is_empty());
+    }
+
+    #[tokio::test]
     async fn records_completed_sync_runs() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
