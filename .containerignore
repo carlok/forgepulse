@@ -1,0 +1,9 @@
+.git
+.env
+target
+server/target
+web/node_modules
+web/dist
+web/coverage
+web/playwright-report
+web/test-results

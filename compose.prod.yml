@@ -1,0 +1,26 @@
+name: forgepulse
+
+services:
+  forgepulse:
+    image: forgepulse:local
+    build:
+      context: .
+      dockerfile: Containerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      FORGEPULSE_DB: sqlite:/data/forgepulse.db
+      FORGEPULSE_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:18744:18744"
+    volumes:
+      - forgepulse-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:18744/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  forgepulse-data:

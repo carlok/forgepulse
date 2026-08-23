@@ -1,0 +1,26 @@
+name: ForgePulse checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes podman
+      - name: Build development images
+        run: podman compose -f compose.dev.yml build
+      - name: Server format and tests
+        run: |
+          podman compose -f compose.dev.yml run --rm api cargo fmt --all -- --check
+          podman compose -f compose.dev.yml run --rm api cargo test --workspace
+          podman compose -f compose.dev.yml run --rm api cargo llvm-cov --workspace --all-features --fail-under-lines 80
+      - name: Client lint and coverage
+        run: podman compose -f compose.dev.yml run --rm web sh -c 'pnpm install --frozen-lockfile --store-dir /pnpm/store && pnpm lint && pnpm test:coverage'
+      - name: Build immutable production image
+        run: podman compose -f compose.prod.yml build

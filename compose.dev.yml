@@ -1,0 +1,43 @@
+name: forgepulse
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Containerfile.api.dev
+    command: cargo watch -x run
+    working_dir: /workspace/server
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      FORGEPULSE_DB: sqlite:/data/forgepulse.db
+      FORGEPULSE_HOST: 0.0.0.0
+      FORGEPULSE_PORT: "18744"
+      CARGO_HOME: /cargo
+      CARGO_TARGET_DIR: /cargo/target
+    ports:
+      - "127.0.0.1:18744:18744"
+    volumes:
+      - .:/workspace:rw
+      - forgepulse-data:/data
+      - forgepulse-cargo:/cargo
+
+  web:
+    build:
+      context: .
+      dockerfile: Containerfile.web.dev
+    command: sh -c 'pnpm install --frozen-lockfile --store-dir /pnpm/store && pnpm dev --host 0.0.0.0'
+    working_dir: /workspace/web
+    environment:
+      CI: "true"
+    ports:
+      - "127.0.0.1:18745:18745"
+    volumes:
+      - .:/workspace:rw
+      - forgepulse-pnpm:/pnpm/store
+
+volumes:
+  forgepulse-data:
+  forgepulse-cargo:
+  forgepulse-pnpm:
