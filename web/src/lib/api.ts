@@ -46,6 +46,7 @@ export interface Dashboard {
   total_views: number;
   total_clones: number;
   chart: CloneChartPoint[];
+  views_chart: DayPoint[];
   total_clone_statistics: CloneStatistics | null;
   unique_clone_statistics: CloneStatistics | null;
 }

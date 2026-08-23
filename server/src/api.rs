@@ -67,6 +67,7 @@ async fn dashboard(
     let search = query.q.unwrap_or_default();
     let mut all = state.store.repository_summaries(&search).await?;
     let chart = state.store.clone_chart(&all).await?;
+    let views_chart = state.store.views_chart(&all).await?;
     let total_stars = all.iter().map(|item| item.repository.stars).sum();
     let total_forks = all.iter().map(|item| item.repository.forks).sum();
     let total_views = all.iter().map(|item| item.total_views).sum();
@@ -86,6 +87,7 @@ async fn dashboard(
         total_views,
         total_clones,
         chart,
+        views_chart,
         total_clone_statistics,
         unique_clone_statistics,
     }))
@@ -299,6 +301,10 @@ mod tests {
                 .upsert_daily_traffic(name, "2026-08-01", "clone", clones, clones / 2)
                 .await
                 .expect("traffic");
+            store
+                .upsert_daily_traffic(name, "2026-08-01", "view", clones * 3, clones)
+                .await
+                .expect("traffic");
         }
         let response = router(
             AppState {
@@ -326,6 +332,8 @@ mod tests {
         assert_eq!(json["items"][0]["clone_rank"], 1);
         assert_eq!(json["chart"][0]["total_clones"], 5);
         assert_eq!(json["chart"][0]["unique_cloners"], 2);
+        assert_eq!(json["views_chart"][0]["count"], 15);
+        assert_eq!(json["views_chart"][0]["uniques"], 5);
         assert_eq!(json["total_clone_statistics"]["mean"], 5.0);
     }
 

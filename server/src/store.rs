@@ -252,6 +252,30 @@ impl Store {
         &self,
         repositories: &[RepositorySummary],
     ) -> anyhow::Result<Vec<CloneChartPoint>> {
+        Ok(self
+            .traffic_chart(repositories, "clone")
+            .await?
+            .into_iter()
+            .map(|point| CloneChartPoint {
+                day: point.day,
+                total_clones: point.count,
+                unique_cloners: point.uniques,
+            })
+            .collect())
+    }
+
+    pub async fn views_chart(
+        &self,
+        repositories: &[RepositorySummary],
+    ) -> anyhow::Result<Vec<DayPoint>> {
+        self.traffic_chart(repositories, "view").await
+    }
+
+    async fn traffic_chart(
+        &self,
+        repositories: &[RepositorySummary],
+        metric: &str,
+    ) -> anyhow::Result<Vec<DayPoint>> {
         if repositories.is_empty() {
             return Ok(Vec::new());
         }
@@ -260,8 +284,10 @@ impl Store {
             .map(|repo| repo.repository.name.as_str())
             .collect::<Vec<_>>();
         let mut builder = sqlx::QueryBuilder::new(
-            "SELECT day, SUM(count) AS count, SUM(uniques) AS uniques FROM daily_traffic WHERE metric='clone' AND repository_name IN (",
+            "SELECT day, SUM(count) AS count, SUM(uniques) AS uniques FROM daily_traffic WHERE metric=",
         );
+        builder.push_bind(metric);
+        builder.push(" AND repository_name IN (");
         {
             let mut separated = builder.separated(", ");
             for name in names {
@@ -273,7 +299,7 @@ impl Store {
             .build_query_as::<DayPoint>()
             .fetch_all(&self.pool)
             .await?;
-        Ok(zero_fill_chart(points))
+        Ok(zero_fill(points))
     }
 
     pub async fn traffic(
@@ -358,7 +384,7 @@ struct SummaryRow {
     clones_30d: i64,
 }
 
-fn zero_fill_chart(points: Vec<DayPoint>) -> Vec<CloneChartPoint> {
+fn zero_fill(points: Vec<DayPoint>) -> Vec<DayPoint> {
     let Some(first) = points.first() else {
         return Vec::new();
     };
@@ -370,19 +396,19 @@ fn zero_fill_chart(points: Vec<DayPoint>) -> Vec<CloneChartPoint> {
         .map(|point| (point.day, (point.count, point.uniques)))
         .collect::<BTreeMap<_, _>>();
     let start = std::cmp::max(start, end - Duration::days(119));
-    let mut chart = Vec::new();
+    let mut filled = Vec::new();
     let mut day = start;
     while day <= end {
         let key = day.to_string();
-        let (total_clones, unique_cloners) = by_day.get(&key).copied().unwrap_or_default();
-        chart.push(CloneChartPoint {
+        let (count, uniques) = by_day.get(&key).copied().unwrap_or_default();
+        filled.push(DayPoint {
             day: key,
-            total_clones,
-            unique_cloners,
+            count,
+            uniques,
         });
         day += Duration::days(1);
     }
-    chart
+    filled
 }
 
 pub fn statistics_for_chart(
@@ -403,7 +429,7 @@ mod tests {
 
     #[test]
     fn chart_fills_missing_calendar_days() {
-        let chart = zero_fill_chart(vec![
+        let chart = zero_fill(vec![
             DayPoint {
                 day: "2026-01-01".into(),
                 count: 3,
@@ -416,7 +442,7 @@ mod tests {
             },
         ]);
         assert_eq!(chart.len(), 3);
-        assert_eq!(chart[1].total_clones, 0);
+        assert_eq!(chart[1].count, 0);
     }
 
     #[tokio::test]

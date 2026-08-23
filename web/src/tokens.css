@@ -1,0 +1,123 @@
+:root {
+  --transition-base: 150ms ease;
+  --space-unit: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-base: 0ms;
+  }
+}
+
+/* Terminal — dark, monospace, developer-console feel. Default theme. */
+[data-theme='terminal'] {
+  --color-bg: #0b0f14;
+  --color-bg-texture: repeating-linear-gradient(
+    0deg,
+    rgba(255, 255, 255, 0.015) 0px,
+    rgba(255, 255, 255, 0.015) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  --color-sidebar-bg: #0e1319;
+  --color-sidebar-heading: #f4f8fb;
+  --color-sidebar-text: #8fa3ad;
+  --color-sidebar-text-muted: #5f7480;
+  --color-sidebar-border: #1f2a35;
+  --color-surface: #10161d;
+  --color-surface-hover: #161e27;
+  --color-border: #1f2a35;
+  --color-border-strong: #29394a;
+  --text-primary: #d7e2e9;
+  --text-secondary: #8fa3ad;
+  --text-muted: #5f7480;
+  --accent: #f2a93b;
+  --accent-strong: #ffbd5c;
+  --accent-contrast: #14100a;
+  --success: #4ade80;
+  --danger: #f2685c;
+
+  --font-display: 'JetBrains Mono', ui-monospace, monospace;
+  --font-body: 'JetBrains Mono', ui-monospace, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-pill: 3px;
+  --shadow-card: none;
+  --border-width-card: 1px;
+  --space-unit: 0.92;
+}
+
+/* Editorial — light, warm, serif. */
+[data-theme='editorial'] {
+  --color-bg: #f6f1e7;
+  --color-bg-texture:
+    radial-gradient(rgba(60, 40, 20, 0.035) 1px, transparent 1px),
+    radial-gradient(rgba(60, 40, 20, 0.02) 1px, transparent 1px);
+  --color-sidebar-bg: #2a2420;
+  --color-sidebar-heading: #fbf1e2;
+  --color-sidebar-text: #d8cdbb;
+  --color-sidebar-text-muted: #9c8f78;
+  --color-sidebar-border: #3a332c;
+  --color-surface: #fffdf8;
+  --color-surface-hover: #fbf5e9;
+  --color-border: #e4dcc8;
+  --color-border-strong: #d8cba9;
+  --text-primary: #2a2420;
+  --text-secondary: #5c5346;
+  --text-muted: #8a806e;
+  --accent: #b5502f;
+  --accent-strong: #963f24;
+  --accent-contrast: #fff8ee;
+  --success: #6b8f3f;
+  --danger: #a83b2e;
+
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'Source Serif 4', Georgia, serif;
+  --font-mono: 'Source Serif 4', Georgia, serif;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+  --shadow-card: 0 20px 40px -12px rgba(60, 40, 20, 0.14);
+  --border-width-card: 1px;
+  --space-unit: 1.12;
+}
+
+/* Geometric — light, bold, neo-brutalist. */
+[data-theme='geometric'] {
+  --color-bg: #f4f1ea;
+  --color-bg-texture: radial-gradient(circle, rgba(20, 19, 26, 0.06) 1px, transparent 1px);
+  --color-sidebar-bg: #14131a;
+  --color-sidebar-heading: #ffffff;
+  --color-sidebar-text: #efeee8;
+  --color-sidebar-text-muted: #918f9c;
+  --color-sidebar-border: #14131a;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f4f1ea;
+  --color-border: #14131a;
+  --color-border-strong: #14131a;
+  --text-primary: #14131a;
+  --text-secondary: #4a4854;
+  --text-muted: #7a7784;
+  --accent: #2b4bf2;
+  --accent-strong: #1c35c9;
+  --accent-contrast: #ffffff;
+  --success: #4c9a2a;
+  --danger: #e2401f;
+
+  --font-display: 'Unbounded', 'Archivo', sans-serif;
+  --font-body: 'Archivo', ui-sans-serif, sans-serif;
+  --font-mono: 'Archivo', ui-sans-serif, sans-serif;
+
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-pill: 0;
+  --shadow-card: 4px 4px 0 0 var(--color-border);
+  --border-width-card: 2px;
+  --space-unit: 1;
+}

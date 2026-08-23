@@ -86,6 +86,7 @@ pub struct DashboardResponse {
     pub total_views: i64,
     pub total_clones: i64,
     pub chart: Vec<CloneChartPoint>,
+    pub views_chart: Vec<DayPoint>,
     pub total_clone_statistics: Option<CloneStatistics>,
     pub unique_clone_statistics: Option<CloneStatistics>,
 }
