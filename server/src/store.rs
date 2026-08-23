@@ -493,8 +493,20 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
         let store = Store::connect(&database).await.expect("connect");
-        assert!(store.clone_chart(&[]).await.expect("clone chart").is_empty());
-        assert!(store.views_chart(&[]).await.expect("views chart").is_empty());
+        assert!(
+            store
+                .clone_chart(&[])
+                .await
+                .expect("clone chart")
+                .is_empty()
+        );
+        assert!(
+            store
+                .views_chart(&[])
+                .await
+                .expect("views chart")
+                .is_empty()
+        );
     }
 
     #[tokio::test]

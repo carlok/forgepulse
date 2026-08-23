@@ -13,6 +13,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes podman
+      - name: Start Podman API socket
+        run: |
+          mkdir -p "/run/user/$(id -u)/podman"
+          nohup podman system service --time=0 "unix:///run/user/$(id -u)/podman/podman.sock" >/tmp/podman-service.log 2>&1 &
+          for _ in $(seq 1 20); do
+            [ -S "/run/user/$(id -u)/podman/podman.sock" ] && exit 0
+            sleep 0.5
+          done
+          echo "Podman socket never came up:" >&2
+          cat /tmp/podman-service.log >&2
+          exit 1
       - name: Build development images
         run: podman compose -f compose.dev.yml build
       - name: Server format and tests

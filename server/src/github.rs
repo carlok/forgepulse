@@ -375,10 +375,20 @@ mod tests {
         assert_eq!(summary.total_clones, 5);
         assert_eq!(summary.total_views, 9);
         assert_eq!(summary.repository.issues, 2);
-        assert_eq!(store.referrers("carlok/alpha").await.expect("referrers").len(), 1);
+        assert_eq!(
+            store
+                .referrers("carlok/alpha")
+                .await
+                .expect("referrers")
+                .len(),
+            1
+        );
         assert_eq!(store.paths("carlok/alpha").await.expect("paths").len(), 1);
         assert_eq!(store.stars("carlok/alpha").await.expect("stars").len(), 1);
-        assert_eq!(store.sync_runs().await.expect("runs")[0].status, "succeeded");
+        assert_eq!(
+            store.sync_runs().await.expect("runs")[0].status,
+            "succeeded"
+        );
     }
 
     #[tokio::test]
@@ -386,12 +396,9 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
         let store = Store::connect(&database).await.expect("store");
-        let collector = GitHubCollector::with_base_url(
-            "token".into(),
-            "carlok/*".into(),
-            "http://127.0.0.1:9",
-        )
-        .expect("collector");
+        let collector =
+            GitHubCollector::with_base_url("token".into(), "carlok/*".into(), "http://127.0.0.1:9")
+                .expect("collector");
         assert!(collector.sync(&store).await.is_err());
         let run = store.sync_runs().await.expect("runs").pop().expect("run");
         assert_eq!(run.status, "failed");
