@@ -319,9 +319,44 @@ impl Store {
             .bind(repository_name).fetch_all(&self.pool).await?)
     }
 
+    /// The most recently captured referrer snapshot only, for display — `referrers` keeps the
+    /// full daily history (used by the JSONL export), but GitHub's referrer/path stats rarely
+    /// change day to day, so showing every stored day in the UI reads as duplicate rows.
+    pub async fn latest_referrers(
+        &self,
+        repository_name: &str,
+    ) -> anyhow::Result<Vec<ReferrerPoint>> {
+        Ok(sqlx::query_as(
+            r#"SELECT captured_on, referrer, count, uniques FROM referrer_snapshots
+               WHERE repository_name = ? AND captured_on = (
+                 SELECT MAX(captured_on) FROM referrer_snapshots WHERE repository_name = ?
+               )
+               ORDER BY count DESC"#,
+        )
+        .bind(repository_name)
+        .bind(repository_name)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     pub async fn paths(&self, repository_name: &str) -> anyhow::Result<Vec<PathPoint>> {
         Ok(sqlx::query_as("SELECT captured_on, path, title, count, uniques FROM path_snapshots WHERE repository_name=? ORDER BY captured_on DESC, count DESC")
             .bind(repository_name).fetch_all(&self.pool).await?)
+    }
+
+    /// The most recently captured path snapshot only — see `latest_referrers`.
+    pub async fn latest_paths(&self, repository_name: &str) -> anyhow::Result<Vec<PathPoint>> {
+        Ok(sqlx::query_as(
+            r#"SELECT captured_on, path, title, count, uniques FROM path_snapshots
+               WHERE repository_name = ? AND captured_on = (
+                 SELECT MAX(captured_on) FROM path_snapshots WHERE repository_name = ?
+               )
+               ORDER BY count DESC"#,
+        )
+        .bind(repository_name)
+        .bind(repository_name)
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     pub async fn stars(&self, repository_name: &str) -> anyhow::Result<Vec<StarPoint>> {
@@ -443,6 +478,57 @@ mod tests {
         ]);
         assert_eq!(chart.len(), 3);
         assert_eq!(chart[1].count, 0);
+    }
+
+    #[tokio::test]
+    async fn latest_referrers_and_paths_skip_older_identical_snapshots() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
+        let store = Store::connect(&database).await.expect("connect");
+        store
+            .upsert_repository(&Repository {
+                name: "carlok/alpha".into(),
+                description: String::new(),
+                stars: 0,
+                forks: 0,
+                watchers: 0,
+                issues: 0,
+                pull_requests: 0,
+                is_fork: false,
+                is_archived: false,
+                updated_at: "2026-08-01".into(),
+            })
+            .await
+            .expect("repository");
+        // GitHub's referrer/path stats often don't change day to day, so the same values get
+        // captured on consecutive days — `latest_*` must still return each list only once.
+        for day in ["2026-08-23", "2026-08-24"] {
+            store
+                .upsert_referrer("carlok/alpha", day, "github.com", 310, 7)
+                .await
+                .expect("referrer");
+            store
+                .upsert_path("carlok/alpha", day, "/carlok/alpha", "Overview", 190, 18)
+                .await
+                .expect("path");
+        }
+
+        let all_referrers = store.referrers("carlok/alpha").await.expect("referrers");
+        assert_eq!(all_referrers.len(), 2, "full history keeps every snapshot");
+
+        let latest_referrers = store
+            .latest_referrers("carlok/alpha")
+            .await
+            .expect("latest referrers");
+        assert_eq!(latest_referrers.len(), 1);
+        assert_eq!(latest_referrers[0].captured_on, "2026-08-24");
+
+        let latest_paths = store
+            .latest_paths("carlok/alpha")
+            .await
+            .expect("latest paths");
+        assert_eq!(latest_paths.len(), 1);
+        assert_eq!(latest_paths[0].captured_on, "2026-08-24");
     }
 
     #[tokio::test]

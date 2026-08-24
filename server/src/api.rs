@@ -109,8 +109,8 @@ async fn repository_detail(
         summary,
         clones: state.store.traffic(&name, "clone").await?,
         views: state.store.traffic(&name, "view").await?,
-        referrers: state.store.referrers(&name).await?,
-        paths: state.store.paths(&name).await?,
+        referrers: state.store.latest_referrers(&name).await?,
+        paths: state.store.latest_paths(&name).await?,
         stars: state.store.stars(&name).await?,
     }))
 }
