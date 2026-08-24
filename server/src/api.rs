@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{env, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -57,7 +57,8 @@ pub fn router(state: AppState, web_dir: Option<String>) -> Router {
 }
 
 async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"status": "ok"}))
+    let git_ref = env::var("FORGEPULSE_GIT_REF").unwrap_or_else(|_| "local".to_string());
+    Json(serde_json::json!({"status": "ok", "git_ref": git_ref}))
 }
 
 async fn dashboard(
@@ -464,5 +465,38 @@ mod tests {
         )
         .expect("json");
         assert_eq!(json["error"], "Not found");
+    }
+
+    #[tokio::test]
+    async fn health_reports_a_git_ref() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
+        let store = Store::connect(&database).await.expect("store");
+        let response = router(
+            AppState {
+                store,
+                collector: None,
+            },
+            None,
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/api/health")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+        assert_eq!(json["status"], "ok");
+        // Defaults to "local" when FORGEPULSE_GIT_REF isn't set, which is the case in this
+        // process — mutating env vars isn't safe to do per-test in a parallel test binary.
+        assert_eq!(json["git_ref"], "local");
     }
 }

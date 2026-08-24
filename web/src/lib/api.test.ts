@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { exportUrl, loadDashboard, loadRepository } from './api';
+import { exportUrl, loadDashboard, loadHealth, loadRepository } from './api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -22,5 +22,17 @@ describe('dashboard API client', () => {
     vi.stubGlobal('fetch', fetchMock);
     await loadRepository('carlok/repository name');
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/repositories/carlok/repository%20name');
+  });
+
+  it('loads server health with a git ref', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'ok', git_ref: 'main@abc1234' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(loadHealth()).resolves.toEqual({ status: 'ok', git_ref: 'main@abc1234' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/health');
+  });
+
+  it('reports an HTTP error for health', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+    await expect(loadHealth()).rejects.toThrow('503');
   });
 });

@@ -60,6 +60,17 @@ export interface RepositoryDetail {
   stars: StarPoint[];
 }
 
+export interface HealthStatus {
+  status: string;
+  git_ref: string;
+}
+
+export async function loadHealth(): Promise<HealthStatus> {
+  const response = await fetch('/api/health');
+  if (!response.ok) throw new Error(`Health request failed: ${response.status}`);
+  return response.json() as Promise<HealthStatus>;
+}
+
 export async function loadDashboard(query = '', page = 1, perPage = 25): Promise<Dashboard> {
   const response = await fetch(`/api/v1/dashboard?q=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}`);
   if (!response.ok) throw new Error(`Dashboard request failed: ${response.status}`);

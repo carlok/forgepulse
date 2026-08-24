@@ -13,6 +13,7 @@ services:
     environment:
       FORGEPULSE_DB: sqlite:/data/forgepulse.db
       FORGEPULSE_HOST: 0.0.0.0
+      FORGEPULSE_GIT_REF: ${FORGEPULSE_GIT_REF:-local}
     ports:
       - "127.0.0.1:18744:18744"
     volumes:

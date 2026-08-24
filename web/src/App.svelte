@@ -4,7 +4,7 @@
   import { flip } from 'svelte/animate';
   import * as echarts from 'echarts';
   import { ArrowLeft, ChevronLeft, ChevronRight, Download, ExternalLink, GitBranch, Search, User } from '@lucide/svelte';
-  import { exportUrl, loadDashboard, loadRepository, type Dashboard, type RepositoryDetail } from './lib/api';
+  import { exportUrl, loadDashboard, loadHealth, loadRepository, type Dashboard, type RepositoryDetail } from './lib/api';
   import { formatPercent, formatStatistic, ordinal, selectedStatistics, type StatisticMetric } from './lib/stats';
   import { CHART_COLORS } from './lib/theme';
   import { seriesValues, unionDays } from './lib/charts';
@@ -21,6 +21,7 @@
   let selectedRepository = repositoryFromPath();
   const PER_PAGE = 25;
   let page = 1;
+  let gitRef = 'local';
 
   $: stats = dashboard ? selectedStatistics(metric, dashboard.total_clone_statistics, dashboard.unique_clone_statistics) : null;
   $: totalPages = dashboard ? Math.max(1, Math.ceil(dashboard.total_count / PER_PAGE)) : 1;
@@ -29,6 +30,7 @@
 
   onMount(() => {
     void loadCurrentPage();
+    void loadHealth().then((health) => { gitRef = health.git_ref; }).catch(() => {});
     const resize = () => { chart?.resize(); detailChart?.resize(); };
     const popstate = () => { disposeCharts(); selectedRepository = repositoryFromPath(); void loadCurrentPage(); };
     window.addEventListener('resize', resize);
@@ -173,7 +175,7 @@
         <div class="detail-grid"><section class="panel"><div class="panel-title"><h2>Top referrers</h2><span>{detail.referrers.length} stored</span></div><div class="scroll"><table><thead><tr><th>Referrer</th><th>Views</th><th>Unique</th></tr></thead><tbody>{#each detail.referrers as item}<tr><td>{item.referrer}</td><td>{item.count}</td><td>{item.uniques}</td></tr>{:else}<tr><td colspan="3">No referrer snapshots yet.</td></tr>{/each}</tbody></table></div></section><section class="panel"><div class="panel-title"><h2>Popular paths</h2><span>{detail.paths.length} stored</span></div><div class="scroll"><table><thead><tr><th>Path</th><th>Views</th><th>Unique</th></tr></thead><tbody>{#each detail.paths as item}<tr><td title={item.title}>{item.path}</td><td>{item.count}</td><td>{item.uniques}</td></tr>{:else}<tr><td colspan="3">No path snapshots yet.</td></tr>{/each}</tbody></table></div></section></div>
       {:else}<p class="loading">Loading repository history…</p>{/if}
     {:else}
-      <header><div><span class="eyebrow">Analytics console</span><h1>Repositories</h1></div><span class="status">LOCAL</span></header>
+      <header><div><span class="eyebrow">Analytics console</span><h1>Repositories</h1></div><span class="status">{gitRef}</span></header>
       <form on:submit|preventDefault={submitSearch} class="search"><input bind:value={query} placeholder="owner/repository" aria-label="Search repositories" />{#if query}<button type="button" class="secondary" on:click={clearSearch}>Cancel</button>{/if}<button><Search size={14} />Search</button></form>
       {#if error}<p class="error">{error}</p>{/if}
       {#if dashboard}
