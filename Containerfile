@@ -21,6 +21,7 @@ RUN apt-get update \
     && useradd --system --create-home --uid 10001 forgepulse
 COPY --from=server-build /build/target/release/forgepulse-server /usr/local/bin/forgepulse-server
 COPY --from=web-build /build/web/dist /opt/forgepulse/web
+RUN mkdir -p /data && chown forgepulse:forgepulse /data
 USER forgepulse
 ENV FORGEPULSE_HOST=0.0.0.0 \
     FORGEPULSE_WEB_DIR=/opt/forgepulse/web \
