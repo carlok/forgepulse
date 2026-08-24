@@ -60,8 +60,8 @@ export interface RepositoryDetail {
   stars: StarPoint[];
 }
 
-export async function loadDashboard(query = ''): Promise<Dashboard> {
-  const response = await fetch(`/api/v1/dashboard?q=${encodeURIComponent(query)}`);
+export async function loadDashboard(query = '', page = 1, perPage = 25): Promise<Dashboard> {
+  const response = await fetch(`/api/v1/dashboard?q=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}`);
   if (!response.ok) throw new Error(`Dashboard request failed: ${response.status}`);
   return response.json() as Promise<Dashboard>;
 }

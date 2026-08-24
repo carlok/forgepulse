@@ -111,6 +111,11 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
 .error { color: var(--danger); margin-bottom: 14px; }
 .loading { color: var(--text-muted); }
 
+.pager { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-top: var(--border-width-card) solid var(--color-border-strong); font-size: .72rem; color: var(--text-muted); }
+.pager-controls { display: flex; gap: 8px; }
+.pager .button { padding: 6px 9px; font-size: .72rem; }
+.pager .button:disabled { opacity: .4; cursor: not-allowed; pointer-events: none; }
+
 .site-footer {
   display: flex;
   align-items: center;
