@@ -27,7 +27,7 @@ aside {
 }
 .brand { color: var(--color-sidebar-heading); font-family: var(--font-display); font-weight: 800; letter-spacing: -0.06em; font-size: 1.45rem; text-decoration: none; }
 aside p { font-size: .82rem; line-height: 1.5; color: var(--color-sidebar-text-muted); }
-.sidebar-bottom { margin-top: auto; display: grid; gap: 8px; }
+.export-link { margin-top: 16px; }
 
 .button, .project-link, .back, .search button {
   display: inline-flex;
@@ -62,6 +62,9 @@ header { display: flex; align-items: center; justify-content: space-between; mar
 .eyebrow { font-size: .72rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
 h1, h2, p { margin: 0; }
 h1 { font-family: var(--font-display); letter-spacing: -.05em; font-size: 2.1rem; }
+.repository-title-link { display: inline-flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; }
+.repository-title-link:hover { color: var(--accent); }
+.repository-title-link svg { flex-shrink: 0; opacity: .6; }
 h2 { font-family: var(--font-display); font-size: .95rem; letter-spacing: -.02em; }
 .status { font-size: .7rem; letter-spacing: .1em; font-weight: 800; color: var(--success); border: 1px solid var(--success); padding: 5px 7px; border-radius: var(--radius-pill); }
 .search { display: flex; gap: 8px; max-width: 580px; margin-bottom: 22px; }
@@ -141,7 +144,7 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
 @media (max-width: 980px) {
   main { grid-template-columns: 1fr; }
   aside { min-height: auto; flex-direction: row; align-items: center; gap: 18px; }
-  .sidebar-bottom { margin: 0 0 0 auto; display: flex; }
+  .export-link { margin: 0 0 0 auto; }
   .content { padding: 22px; }
   .grid { grid-template-columns: 1fr; }
   .kpis { grid-template-columns: repeat(2, 1fr); }
@@ -155,7 +158,7 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
   h1 { font-size: 1.7rem; }
   .kpis { grid-template-columns: 1fr 1fr; }
   .search { max-width: none; }
-  .sidebar-bottom .button { font-size: .68rem; padding: 7px; }
+  .export-link { font-size: .68rem; padding: 7px; }
   .site-footer { flex-direction: column; align-items: flex-start; padding: 12px 15px; }
 }
 

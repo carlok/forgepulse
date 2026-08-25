@@ -87,6 +87,12 @@
     detailChart?.dispose(); detailChart = undefined;
   }
 
+  // GitHub reports some referrers as a hostname ("github.com") and others as a bare label
+  // ("Google") or a mobile app id ("org.telegram.messenger") — only the former is a real link.
+  function referrerUrl(referrer: string): string | null {
+    return /^\S+\.\S+$/.test(referrer) ? `https://${referrer}` : null;
+  }
+
   function openRepository(name: string) {
     disposeCharts();
     selectedRepository = name;
@@ -155,13 +161,11 @@
     <a class="brand" href="/" on:click|preventDefault={goHome}>ForgePulse</a>
     <p>Local repository traffic history, retained beyond the rolling source window.</p>
     <a class="project-link" href="https://github.com/carlok/forgepulse" target="_blank" rel="noreferrer">ForgePulse project<ExternalLink size={13} /></a>
-    <div class="sidebar-bottom">
-      {#if !selectedRepository}<a class="button" href={exportUrl(query)}><Download size={14} />Export JSONL</a>{/if}
-    </div>
+    {#if !selectedRepository}<a class="button export-link" href={exportUrl(query)}><Download size={14} />Export JSONL</a>{/if}
   </aside>
   <section class="content">
     {#if selectedRepository}
-      <header><div><span class="eyebrow">Repository detail</span><h1>{selectedRepository}</h1></div><button class="back" on:click={goHome}><ArrowLeft size={14} />All repositories</button></header>
+      <header><div><span class="eyebrow">Repository detail</span><h1><a class="repository-title-link" href={`https://github.com/${selectedRepository}`} target="_blank" rel="noreferrer">{selectedRepository}<ExternalLink size={18} /></a></h1></div><button class="back" on:click={goHome}><ArrowLeft size={14} />All repositories</button></header>
       {#if error}<p class="error">{error}</p>{/if}
       {#if detail}
         <p class="description">{detail.summary.description || 'No repository description.'}</p>
@@ -172,7 +176,7 @@
           <article in:fly={{ y: 8, duration: 260, delay: 120 }}><span>Stars</span><strong>{detail.summary.stars}</strong></article>
         </div>
         <section class="panel" in:fade={{ duration: 220 }}><div class="panel-title"><div><h2>Traffic over time</h2><span>Stored clone and view history</span></div></div><div class="detail-chart" bind:this={detailChartElement}></div></section>
-        <div class="detail-grid"><section class="panel"><div class="panel-title"><h2>Top referrers</h2><span>{detail.referrers.length} stored</span></div><div class="scroll"><table><thead><tr><th>Referrer</th><th>Views</th><th>Unique</th></tr></thead><tbody>{#each detail.referrers as item}<tr><td>{item.referrer}</td><td>{item.count}</td><td>{item.uniques}</td></tr>{:else}<tr><td colspan="3">No referrer snapshots yet.</td></tr>{/each}</tbody></table></div></section><section class="panel"><div class="panel-title"><h2>Popular paths</h2><span>{detail.paths.length} stored</span></div><div class="scroll"><table><thead><tr><th>Path</th><th>Views</th><th>Unique</th></tr></thead><tbody>{#each detail.paths as item}<tr><td title={item.title}>{item.path}</td><td>{item.count}</td><td>{item.uniques}</td></tr>{:else}<tr><td colspan="3">No path snapshots yet.</td></tr>{/each}</tbody></table></div></section></div>
+        <div class="detail-grid"><section class="panel"><div class="panel-title"><h2>Top referrers</h2><span>{detail.referrers.length} stored</span></div><div class="scroll"><table><thead><tr><th>Referrer</th><th>Views</th><th>Unique</th></tr></thead><tbody>{#each detail.referrers as item}<tr><td>{#if referrerUrl(item.referrer)}<a class="repository-link" href={referrerUrl(item.referrer)} target="_blank" rel="noreferrer">{item.referrer}</a>{:else}{item.referrer}{/if}</td><td>{item.count}</td><td>{item.uniques}</td></tr>{:else}<tr><td colspan="3">No referrer snapshots yet.</td></tr>{/each}</tbody></table></div></section><section class="panel"><div class="panel-title"><h2>Popular paths</h2><span>{detail.paths.length} stored</span></div><div class="scroll"><table><thead><tr><th>Path</th><th>Views</th><th>Unique</th></tr></thead><tbody>{#each detail.paths as item}<tr><td><a class="repository-link" title={item.title} href={`https://github.com${item.path}`} target="_blank" rel="noreferrer">{item.path}</a></td><td>{item.count}</td><td>{item.uniques}</td></tr>{:else}<tr><td colspan="3">No path snapshots yet.</td></tr>{/each}</tbody></table></div></section></div>
       {:else}<p class="loading">Loading repository history…</p>{/if}
     {:else}
       <header><div><span class="eyebrow">Analytics console</span><h1>Repositories</h1></div><span class="status">{gitRef}</span></header>
