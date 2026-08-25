@@ -3,6 +3,7 @@ name: forgepulse
 services:
   forgepulse:
     image: forgepulse:local
+    container_name: forgepulse-app
     build:
       context: .
       dockerfile: Containerfile

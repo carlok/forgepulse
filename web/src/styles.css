@@ -108,6 +108,7 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
 .statistics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--color-border); }
 .statistics div { background: var(--color-surface); padding: 10px 16px; display: grid; gap: 3px; }
 .statistics strong { font-family: var(--font-display); font-size: 1rem; }
+.statistics span { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
 .error { color: var(--danger); margin-bottom: 14px; }
 .loading { color: var(--text-muted); }
 

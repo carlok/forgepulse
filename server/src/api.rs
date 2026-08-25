@@ -8,6 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use chrono::Utc;
 use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
@@ -147,12 +148,16 @@ async fn export_jsonl(
             Ok::<Bytes, std::io::Error>(Bytes::from(format!("{line}\n")))
         }
     });
+    let filename = format!(
+        "forgepulse-export-{}.jsonl",
+        Utc::now().format("%Y%m%d-%H%M")
+    );
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/x-ndjson; charset=utf-8")
         .header(
             header::CONTENT_DISPOSITION,
-            "attachment; filename=forgepulse-export.jsonl",
+            format!("attachment; filename={filename}"),
         )
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from_stream(lines))
@@ -376,6 +381,18 @@ mod tests {
         .await
         .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
+        let disposition = response
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .expect("content-disposition header")
+            .to_str()
+            .expect("ascii header")
+            .to_string();
+        assert!(
+            disposition.starts_with("attachment; filename=forgepulse-export-")
+                && disposition.ends_with(".jsonl"),
+            "unexpected content-disposition: {disposition}"
+        );
         let body = String::from_utf8(
             to_bytes(response.into_body(), usize::MAX)
                 .await
