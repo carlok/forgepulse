@@ -11,7 +11,11 @@ use axum::{
 use chrono::Utc;
 use futures_util::{StreamExt, stream};
 use serde::Deserialize;
-use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
+use tower_http::{
+    cors::CorsLayer,
+    services::{ServeDir, ServeFile},
+    trace::TraceLayer,
+};
 
 use crate::{
     github::GitHubCollector,
@@ -51,7 +55,14 @@ pub fn router(state: AppState, web_dir: Option<String>) -> Router {
         .layer(TraceLayer::new_for_http());
     match web_dir {
         Some(path) => {
-            router.fallback_service(ServeDir::new(path).append_index_html_on_directories(true))
+            // Any path that isn't a real static asset (e.g. /repositories/owner/repo, reached
+            // by right-click "open in new tab" or a bookmarked/typed URL rather than SPA
+            // client-side routing) falls back to index.html so the client router can take over.
+            let index = ServeFile::new(format!("{path}/index.html"));
+            let serve_dir = ServeDir::new(path)
+                .append_index_html_on_directories(true)
+                .fallback(index);
+            router.fallback_service(serve_dir)
         }
         None => router,
     }
@@ -515,5 +526,47 @@ mod tests {
         // Defaults to "local" when FORGEPULSE_GIT_REF isn't set, which is the case in this
         // process — mutating env vars isn't safe to do per-test in a parallel test binary.
         assert_eq!(json["git_ref"], "local");
+    }
+
+    #[tokio::test]
+    async fn unmatched_client_routes_fall_back_to_index_html() {
+        let db_directory = tempfile::tempdir().expect("temporary directory");
+        let database = format!(
+            "sqlite:{}",
+            db_directory.path().join("traffic.db").display()
+        );
+        let store = Store::connect(&database).await.expect("store");
+
+        let web_directory = tempfile::tempdir().expect("temporary web directory");
+        std::fs::write(
+            web_directory.path().join("index.html"),
+            "<!doctype html><title>ForgePulse</title>",
+        )
+        .expect("write index.html");
+
+        let response = router(
+            AppState {
+                store,
+                collector: None,
+            },
+            Some(web_directory.path().display().to_string()),
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/repositories/carlok/forgepulse")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body")
+                .to_vec(),
+        )
+        .expect("utf-8");
+        assert!(body.contains("ForgePulse"));
     }
 }
