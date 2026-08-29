@@ -20,6 +20,7 @@ use tower_http::{
 use crate::{
     github::GitHubCollector,
     models::{DashboardResponse, JsonlExportRow, RepositoryDetail, RepositorySummary, SyncRun},
+    stats,
     store::{Store, statistics_for_chart},
 };
 
@@ -85,6 +86,11 @@ async fn dashboard(
     let total_forks = all.iter().map(|item| item.repository.forks).sum();
     let total_views = all.iter().map(|item| item.total_views).sum();
     let total_clones = all.iter().map(|item| item.total_clones).sum();
+    let repository_clone_daily_median = stats::median(
+        &all.iter()
+            .filter_map(|item| item.clone_daily_median)
+            .collect::<Vec<_>>(),
+    );
     sort_repositories(&mut all, query.sort.as_deref(), query.dir.as_deref());
     let total_count = all.len();
     let page = query.page.unwrap_or(1).max(1);
@@ -103,6 +109,7 @@ async fn dashboard(
         views_chart,
         total_clone_statistics,
         unique_clone_statistics,
+        repository_clone_daily_median,
     }))
 }
 
@@ -290,6 +297,7 @@ mod tests {
             clones_30d: 0,
             clone_rank: 1,
             clone_share_percent: 0.0,
+            clone_daily_median: None,
         }
     }
 
@@ -352,6 +360,8 @@ mod tests {
         assert_eq!(json["views_chart"][0]["count"], 15);
         assert_eq!(json["views_chart"][0]["uniques"], 5);
         assert_eq!(json["total_clone_statistics"]["mean"], 5.0);
+        assert_eq!(json["items"][0]["clone_daily_median"], 5.0);
+        assert_eq!(json["repository_clone_daily_median"], 5.0);
     }
 
     #[tokio::test]
@@ -463,6 +473,64 @@ mod tests {
         assert_eq!(json["chart"], serde_json::json!([]));
         assert_eq!(json["views_chart"], serde_json::json!([]));
         assert_eq!(json["total_clone_statistics"], serde_json::Value::Null);
+        assert_eq!(
+            json["repository_clone_daily_median"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[tokio::test]
+    async fn repository_clone_daily_median_is_the_median_of_each_repos_own_median() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
+        let store = Store::connect(&database).await.expect("store");
+        // A single clone day per repo, so each repo's own daily median is just that value —
+        // isolates the "median across repos' medians" computation from zero_fill behavior,
+        // which is already covered separately in store.rs's tests.
+        for (name, clones) in [("carlok/a", 2), ("carlok/b", 5), ("carlok/c", 8)] {
+            store
+                .upsert_repository(&crate::models::Repository {
+                    name: name.into(),
+                    description: String::new(),
+                    stars: 0,
+                    forks: 0,
+                    watchers: 0,
+                    issues: 0,
+                    pull_requests: 0,
+                    is_fork: false,
+                    is_archived: false,
+                    updated_at: "2026-08-01".into(),
+                })
+                .await
+                .expect("repository");
+            store
+                .upsert_daily_traffic(name, "2026-08-01", "clone", clones, clones / 2)
+                .await
+                .expect("traffic");
+        }
+        let response = router(
+            AppState {
+                store,
+                collector: None,
+            },
+            None,
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/dashboard")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+        assert_eq!(json["repository_clone_daily_median"], 5.0);
     }
 
     #[tokio::test]

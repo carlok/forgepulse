@@ -15,6 +15,7 @@ export interface RepositorySummary extends Repository {
   clones_30d: number;
   clone_rank: number;
   clone_share_percent: number;
+  clone_daily_median: number | null;
 }
 
 export interface CloneChartPoint {
@@ -49,6 +50,7 @@ export interface Dashboard {
   views_chart: DayPoint[];
   total_clone_statistics: CloneStatistics | null;
   unique_clone_statistics: CloneStatistics | null;
+  repository_clone_daily_median: number | null;
 }
 
 export interface RepositoryDetail {

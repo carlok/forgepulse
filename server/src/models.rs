@@ -57,6 +57,9 @@ pub struct RepositorySummary {
     pub clones_30d: i64,
     pub clone_rank: usize,
     pub clone_share_percent: f64,
+    /// Median of this repository's own daily clone counts (zero-filled), so it's comparable to
+    /// the fleet-wide daily median on the same basis. `None` when it has no clone history at all.
+    pub clone_daily_median: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -89,6 +92,10 @@ pub struct DashboardResponse {
     pub views_chart: Vec<DayPoint>,
     pub total_clone_statistics: Option<CloneStatistics>,
     pub unique_clone_statistics: Option<CloneStatistics>,
+    /// Median, across every repository matched by the current search, of each repository's own
+    /// `clone_daily_median` — i.e. "what does a typical repository's typical day look like."
+    /// Scoped to the full matched set, not just the current page.
+    pub repository_clone_daily_median: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]

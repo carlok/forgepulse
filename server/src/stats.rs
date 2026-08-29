@@ -49,6 +49,23 @@ pub fn unique_clone_statistics(points: &[CloneChartPoint]) -> Option<CloneStatis
     )
 }
 
+/// Median of an arbitrary `f64` series — used for "median of medians" style comparisons (e.g.
+/// each repository's own daily-clone median against the median of every repository's median),
+/// where `clone_statistics`'s `i64`-based median doesn't apply.
+pub fn median(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|left, right| left.total_cmp(right));
+    let len = sorted.len();
+    Some(if len % 2 == 0 {
+        (sorted[len / 2 - 1] + sorted[len / 2]) / 2.0
+    } else {
+        sorted[len / 2]
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +101,16 @@ mod tests {
     fn nearest_rank_p95_includes_zero_days() {
         let values = [0, 0, 0, 2, 3, 4, 5, 6, 7, 8];
         assert_eq!(clone_statistics(&values).expect("statistics").p95, 8);
+    }
+
+    #[test]
+    fn median_averages_the_two_middle_values_for_even_length() {
+        assert_eq!(median(&[8.0, 2.0, 5.0]), Some(5.0));
+        assert_eq!(median(&[1.0, 2.0, 8.0, 5.0]), Some(3.5));
+    }
+
+    #[test]
+    fn median_of_empty_slice_is_none() {
+        assert_eq!(median(&[]), None);
     }
 }

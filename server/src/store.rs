@@ -208,6 +208,8 @@ impl Store {
         .bind(format!("%{}%", search.trim()))
         .fetch_all(&self.pool)
         .await?;
+        let names = rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>();
+        let daily_medians = self.repository_clone_daily_medians(&names).await?;
         let total_clones = rows.iter().map(|row| row.total_clones).sum::<i64>();
         let mut summaries = Vec::with_capacity(rows.len());
         let mut previous_total = None;
@@ -217,6 +219,7 @@ impl Store {
                 rank = index + 1;
                 previous_total = Some(row.total_clones);
             }
+            let clone_daily_median = daily_medians.get(&row.name).copied();
             summaries.push(RepositorySummary {
                 repository: Repository {
                     name: row.name,
@@ -243,9 +246,59 @@ impl Store {
                 } else {
                     row.total_clones as f64 * 100.0 / total_clones as f64
                 },
+                clone_daily_median,
             });
         }
         Ok(summaries)
+    }
+
+    /// Median of each repository's own daily clone counts (zero-filled), keyed by repository
+    /// name — the per-repo counterpart to the fleet-wide median in `clone_chart`'s statistics,
+    /// so the two are comparable on the same daily-count basis.
+    async fn repository_clone_daily_medians(
+        &self,
+        names: &[&str],
+    ) -> anyhow::Result<BTreeMap<String, f64>> {
+        if names.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT repository_name, day, count, uniques FROM daily_traffic WHERE metric='clone' AND repository_name IN (",
+        );
+        {
+            let mut separated = builder.separated(", ");
+            for name in names {
+                separated.push_bind(*name);
+            }
+        }
+        builder.push(") ORDER BY repository_name, day");
+        let rows = builder
+            .build_query_as::<RepoDayRow>()
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut by_repo: BTreeMap<String, Vec<DayPoint>> = BTreeMap::new();
+        for row in rows {
+            by_repo
+                .entry(row.repository_name)
+                .or_default()
+                .push(DayPoint {
+                    day: row.day,
+                    count: row.count,
+                    uniques: row.uniques,
+                });
+        }
+
+        Ok(by_repo
+            .into_iter()
+            .filter_map(|(name, points)| {
+                let counts = zero_fill(points)
+                    .into_iter()
+                    .map(|point| point.count)
+                    .collect::<Vec<_>>();
+                stats::clone_statistics(&counts).map(|stats| (name, stats.median))
+            })
+            .collect())
     }
 
     pub async fn clone_chart(
@@ -419,6 +472,14 @@ struct SummaryRow {
     clones_30d: i64,
 }
 
+#[derive(sqlx::FromRow)]
+struct RepoDayRow {
+    repository_name: String,
+    day: String,
+    count: i64,
+    uniques: i64,
+}
+
 fn zero_fill(points: Vec<DayPoint>) -> Vec<DayPoint> {
     let Some(first) = points.first() else {
         return Vec::new();
@@ -478,6 +539,68 @@ mod tests {
         ]);
         assert_eq!(chart.len(), 3);
         assert_eq!(chart[1].count, 0);
+    }
+
+    #[tokio::test]
+    async fn clone_daily_median_is_computed_over_zero_filled_days() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
+        let store = Store::connect(&database).await.expect("connect");
+        store
+            .upsert_repository(&Repository {
+                name: "carlok/alpha".into(),
+                description: String::new(),
+                stars: 0,
+                forks: 0,
+                watchers: 0,
+                issues: 0,
+                pull_requests: 0,
+                is_fork: false,
+                is_archived: false,
+                updated_at: "2026-08-01".into(),
+            })
+            .await
+            .expect("repository");
+        // 2026-08-02 is deliberately skipped: zero_fill must count it as 0, otherwise the
+        // median (2, 0, 8 -> 2) would come out as the wrong-but-plausible (2, 8 -> 5).
+        store
+            .upsert_daily_traffic("carlok/alpha", "2026-08-01", "clone", 2, 1)
+            .await
+            .expect("traffic");
+        store
+            .upsert_daily_traffic("carlok/alpha", "2026-08-03", "clone", 8, 3)
+            .await
+            .expect("traffic");
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].clone_daily_median, Some(2.0));
+    }
+
+    #[tokio::test]
+    async fn clone_daily_median_is_none_for_a_repository_with_no_clone_history() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
+        let store = Store::connect(&database).await.expect("connect");
+        store
+            .upsert_repository(&Repository {
+                name: "carlok/alpha".into(),
+                description: String::new(),
+                stars: 0,
+                forks: 0,
+                watchers: 0,
+                issues: 0,
+                pull_requests: 0,
+                is_fork: false,
+                is_archived: false,
+                updated_at: "2026-08-01".into(),
+            })
+            .await
+            .expect("repository");
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].clone_daily_median, None);
     }
 
     #[tokio::test]
