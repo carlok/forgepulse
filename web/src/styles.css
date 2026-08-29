@@ -102,6 +102,7 @@ th { font-size: .69rem; letter-spacing: .08em; text-transform: uppercase; color:
 td:nth-child(2) { white-space: normal; min-width: 170px; }
 td strong, td small { display: block; }
 td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mono); color: var(--accent); font-weight: 700; }
+.above-median { color: var(--success); font-weight: 700; }
 .chart { height: 285px; padding: 4px; }
 .stats-header { border-top: var(--border-width-card) solid var(--color-border-strong); }
 .segmented { display: inline-flex; }
