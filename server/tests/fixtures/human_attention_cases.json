@@ -1,0 +1,7 @@
+[
+  {"name":"cdclkit-like-ci-heavy-launch","clones_30d":180,"views":30,"unique_cloners":40,"clones_1d":160,"checkout_jobs":120,"launch":true},
+  {"name":"dratify-like-ci-heavy-launch","clones_30d":100,"views":20,"unique_cloners":25,"clones_1d":90,"checkout_jobs":60,"launch":true},
+  {"name":"high-view-starred-external","views_7d":120,"referrer_uniques_14d":80,"new_stars_30d":20,"new_forks_30d":4},
+  {"name":"package-launch-unknown-attribution","clones_30d":220,"views":40,"unique_cloners":60,"clones_1d":190,"launch":true},
+  {"name":"missing-star-fork-history","views_7d":20,"referrer_uniques_14d":5,"new_stars_30d":null,"new_forks_30d":null}
+]

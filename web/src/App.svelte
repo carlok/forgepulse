@@ -18,6 +18,7 @@
   let chart: echarts.ECharts | undefined;
   let detailChart: echarts.ECharts | undefined;
   let metric: StatisticMetric = 'total';
+  let ranking: 'human_attention' | 'clone_volume' = 'human_attention';
   let selectedRepository = repositoryFromPath();
   const PER_PAGE = 25;
   let page = 1;
@@ -62,7 +63,7 @@
   async function refresh() {
     try {
       error = '';
-      dashboard = await loadDashboard(query, page, PER_PAGE);
+      dashboard = await loadDashboard(query, page, PER_PAGE, ranking);
     } catch (caught) {
       error = caught instanceof Error ? caught.message : 'Could not load analytics';
     }
@@ -128,6 +129,28 @@
     query = '';
     page = 1;
     void refresh();
+  }
+
+  function setRanking(next: 'human_attention' | 'clone_volume') {
+    ranking = next;
+    page = 1;
+    void refresh();
+  }
+
+  function attentionTitle(item: Dashboard['items'][number]): string {
+    const c = item.human_attention.components;
+    const value = (label: string, number: number | null) => `${label}: ${number === null ? 'N/A' : number}`;
+    return [
+      `Human attention ${item.human_attention.version}`,
+      value('Unique views (7d)', c.unique_views_7d),
+      value('External referrer uniques (14d)', c.external_referrer_uniques_14d),
+      value('New stars (30d)', c.new_stars_30d),
+      value('New forks (30d)', c.new_forks_30d),
+    ].join('\n');
+  }
+
+  function diagnosisLabel(kind: string): string {
+    return kind.split('_').map((word) => word[0].toUpperCase() + word.slice(1)).join(' ');
   }
 
   function renderDashboardChart() {
@@ -204,7 +227,7 @@
           <article in:fly={{ y: 8, duration: 260, delay: 120 }}><span>Stars</span><strong>{dashboard.total_stars}</strong></article>
         </div>
         <div class="grid">
-          <section class="panel table-panel" in:fade={{ duration: 220 }}><div class="panel-title"><h2>Repository signal</h2><span>{dashboard.total_count} tracked</span></div><div class="scroll"><table><thead><tr><th class="rank-share">Rank</th><th>Name</th><th>Stars</th><th>Views</th><th>Clones</th><th>1d</th><th>7d</th><th>30d</th></tr></thead><tbody>{#each dashboard.items as item (item.name)}<tr animate:flip={{ duration: 220 }}><td class="rank-share"><span>{ordinal(item.clone_rank)}</span><span>{formatPercent(item.clone_share_percent)}</span></td><td><a class="repository-link" href={`/repositories/${item.name}`} on:click={(event) => navigate(event, () => openRepository(item.name))}>{item.name}</a><small>{item.description}</small></td><td>{item.stars}</td><td>{item.total_views}</td><td class:above-median={medianClones !== null && item.clone_daily_median !== null && item.clone_daily_median > medianClones}>{item.total_clones}</td><td>{item.clones_1d}</td><td>{item.clones_7d}</td><td>{item.clones_30d}</td></tr>{/each}</tbody></table></div>{#if totalPages > 1}<div class="pager"><span>Page {page} of {totalPages}</span><div class="pager-controls"><button class="button" disabled={page <= 1} on:click={() => goToPage(page - 1)}><ChevronLeft size={14} />Prev</button><button class="button" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}>Next<ChevronRight size={14} /></button></div></div>{/if}</section>
+          <section class="panel table-panel" in:fade={{ duration: 220 }}><div class="panel-title"><h2>Repository signal</h2><div class="ranking-toggle" aria-label="Ranking view"><button class:active={ranking === 'human_attention'} on:click={() => setRanking('human_attention')}>Human attention</button><button class:active={ranking === 'clone_volume'} on:click={() => setRanking('clone_volume')}>Clone volume</button></div></div><div class="scroll"><table><thead><tr><th class="rank-share">{ranking === 'human_attention' ? 'Attention' : 'Rank'}</th><th>Name</th><th>Stars</th><th>Views</th><th>Clones</th><th>1d</th><th>7d</th><th>30d</th></tr></thead><tbody>{#each dashboard.items as item (item.name)}<tr animate:flip={{ duration: 220 }}><td class="rank-share">{#if ranking === 'human_attention'}<span title={attentionTitle(item)}>{item.human_attention.rank === null ? 'N/A' : ordinal(item.human_attention.rank)}</span><span title={attentionTitle(item)}>{item.human_attention.score === null ? 'N/A' : item.human_attention.score.toFixed(2)}</span>{:else}<span>{ordinal(item.clone_rank)}</span><span>{formatPercent(item.clone_share_percent)}</span>{/if}</td><td><a class="repository-link" href={`/repositories/${item.name}`} on:click={(event) => navigate(event, () => openRepository(item.name))}>{item.name}</a><small>{item.description}</small>{#if item.diagnoses.length}<div class="diagnoses">{#each item.diagnoses as diagnosis}<div class="diagnosis-detail"><span class="diagnosis">{diagnosisLabel(diagnosis.kind)}</span><small>{diagnosis.evidence.join(' · ')}</small></div>{/each}</div>{/if}</td><td>{item.stars}</td><td>{item.total_views}</td><td class:above-median={medianClones !== null && item.clone_daily_median !== null && item.clone_daily_median > medianClones}>{item.total_clones}</td><td>{item.clones_1d}</td><td>{item.clones_7d}</td><td>{item.clones_30d}</td></tr>{/each}</tbody></table></div>{#if totalPages > 1}<div class="pager"><span>Page {page} of {totalPages}</span><div class="pager-controls"><button class="button" disabled={page <= 1} on:click={() => goToPage(page - 1)}><ChevronLeft size={14} />Prev</button><button class="button" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}>Next<ChevronRight size={14} /></button></div></div>{/if}</section>
           <section class="panel chart-panel" in:fade={{ duration: 220, delay: 60 }}><div class="panel-title"><div><h2>Clones &amp; views over time</h2><span>Total events and unique visitors</span></div></div><div class="chart" bind:this={chartElement}></div><div class="stats-header"><h2>Daily clone statistics</h2><div class="segmented"><button class:active={metric === 'total'} on:click={() => metric = 'total'}>Total clones</button><button class:active={metric === 'unique'} on:click={() => metric = 'unique'}>Unique cloners</button></div></div>{#if stats}<div class="statistics"><div><span title="Average value per day across the shown period.">Mean</span><strong>{formatStatistic(stats.mean)}</strong></div><div><span title="Middle value: half the days are at or below this.">Median</span><strong>{formatStatistic(stats.median)}</strong></div><div><span title="Squared spread from the mean — large scale, compare via standard deviation instead.">Variance</span><strong>{formatStatistic(stats.population_variance)}</strong></div><div><span title="Typical spread from the mean, in the same units as the data.">Std. dev.</span><strong>{formatStatistic(stats.population_standard_deviation)}</strong></div><div><span title="Lowest value across the shown period.">Minimum</span><strong>{formatStatistic(stats.minimum, true)}</strong></div><div><span title="Highest value across the shown period.">Maximum</span><strong>{formatStatistic(stats.maximum, true)}</strong></div><div><span title="95th percentile — 95% of days were at or below this value.">P95</span><strong>{formatStatistic(stats.p95, true)}</strong></div></div>{/if}</section>
         </div>
       {:else}<p class="loading">Loading local history…</p>{/if}

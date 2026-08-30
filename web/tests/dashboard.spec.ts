@@ -5,5 +5,6 @@ test('dashboard exposes its core controls', async ({ page }) => {
   await expect(page.getByRole('link', { name: 'Export JSONL' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Total clones' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Unique cloners' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Human attention' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Clone volume' })).toBeVisible();
 });
-

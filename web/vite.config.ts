@@ -12,6 +12,7 @@ export default defineConfig({
   server: {
     port: 18745,
     strictPort: true,
+    allowedHosts: ['host.docker.internal'],
     proxy: { '/api': 'http://api:18744' }
   },
   test: {

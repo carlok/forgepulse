@@ -11,6 +11,7 @@ pub struct Repository {
     pub pull_requests: i64,
     pub is_fork: bool,
     pub is_archived: bool,
+    pub created_at: String,
     pub updated_at: String,
 }
 
@@ -45,6 +46,28 @@ pub struct StarPoint {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HumanAttentionComponents {
+    pub unique_views_7d: Option<i64>,
+    pub external_referrer_uniques_14d: Option<i64>,
+    pub new_stars_30d: Option<i64>,
+    pub new_forks_30d: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HumanAttention {
+    pub version: String,
+    pub score: Option<f64>,
+    pub rank: Option<usize>,
+    pub components: HumanAttentionComponents,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Diagnosis {
+    pub kind: String,
+    pub evidence: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RepositorySummary {
     #[serde(flatten)]
     pub repository: Repository,
@@ -60,6 +83,8 @@ pub struct RepositorySummary {
     /// Median of this repository's own daily clone counts (zero-filled), so it's comparable to
     /// the fleet-wide daily median on the same basis. `None` when it has no clone history at all.
     pub clone_daily_median: Option<f64>,
+    pub human_attention: HumanAttention,
+    pub diagnoses: Vec<Diagnosis>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -82,6 +107,7 @@ pub struct CloneChartPoint {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DashboardResponse {
+    pub ranking: String,
     pub items: Vec<RepositorySummary>,
     pub total_count: usize,
     pub total_stars: i64,
@@ -106,6 +132,7 @@ pub struct RepositoryDetail {
     pub referrers: Vec<ReferrerPoint>,
     pub paths: Vec<PathPoint>,
     pub stars: Vec<StarPoint>,
+    pub forks: Vec<StarPoint>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -116,6 +143,7 @@ pub struct JsonlExportRow {
     pub referrers: Vec<ReferrerPoint>,
     pub paths: Vec<PathPoint>,
     pub stars: Vec<StarPoint>,
+    pub forks: Vec<StarPoint>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]

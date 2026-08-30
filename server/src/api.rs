@@ -37,6 +37,7 @@ pub struct DashboardQuery {
     pub dir: Option<String>,
     pub page: Option<usize>,
     pub per_page: Option<usize>,
+    pub ranking: Option<String>,
 }
 
 pub fn router(state: AppState, web_dir: Option<String>) -> Router {
@@ -91,7 +92,16 @@ async fn dashboard(
             .filter_map(|item| item.clone_daily_median)
             .collect::<Vec<_>>(),
     );
-    sort_repositories(&mut all, query.sort.as_deref(), query.dir.as_deref());
+    let ranking = match query.ranking.as_deref() {
+        Some("clone_volume") => "clone_volume",
+        _ => "human_attention",
+    };
+    sort_repositories(
+        &mut all,
+        query.sort.as_deref(),
+        query.dir.as_deref(),
+        ranking,
+    );
     let total_count = all.len();
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(25).clamp(1, 100);
@@ -99,6 +109,7 @@ async fn dashboard(
     let items = all.into_iter().skip(start).take(per_page).collect();
     let (total_clone_statistics, unique_clone_statistics) = statistics_for_chart(&chart);
     Ok(Json(DashboardResponse {
+        ranking: ranking.into(),
         items,
         total_count,
         total_stars,
@@ -132,6 +143,7 @@ async fn repository_detail(
         referrers: state.store.latest_referrers(&name).await?,
         paths: state.store.latest_paths(&name).await?,
         stars: state.store.stars(&name).await?,
+        forks: state.store.forks(&name).await?,
     }))
 }
 
@@ -161,6 +173,7 @@ async fn export_jsonl(
                 referrers: store.referrers(&name).await.map_err(to_stream_error)?,
                 paths: store.paths(&name).await.map_err(to_stream_error)?,
                 stars: store.stars(&name).await.map_err(to_stream_error)?,
+                forks: store.forks(&name).await.map_err(to_stream_error)?,
             };
             let line = serde_json::to_string(&row).map_err(to_stream_error)?;
             Ok::<Bytes, std::io::Error>(Bytes::from(format!("{line}\n")))
@@ -200,9 +213,18 @@ async fn sync_runs(State(state): State<AppState>) -> Result<Json<Vec<SyncRun>>, 
     Ok(Json(state.store.sync_runs().await?))
 }
 
-fn sort_repositories(items: &mut [RepositorySummary], sort: Option<&str>, dir: Option<&str>) {
+fn sort_repositories(
+    items: &mut [RepositorySummary],
+    sort: Option<&str>,
+    dir: Option<&str>,
+    ranking: &str,
+) {
     let descending = dir != Some("asc");
-    let field = sort.unwrap_or("total_clones");
+    let field = sort.unwrap_or(if ranking == "clone_volume" {
+        "total_clones"
+    } else {
+        "human_attention"
+    });
     items.sort_by(|left, right| {
         let order = match field {
             "name" => left.repository.name.cmp(&right.repository.name),
@@ -212,6 +234,11 @@ fn sort_repositories(items: &mut [RepositorySummary], sort: Option<&str>, dir: O
             "clones_1d" => left.clones_1d.cmp(&right.clones_1d),
             "clones_7d" => left.clones_7d.cmp(&right.clones_7d),
             "clones_30d" => left.clones_30d.cmp(&right.clones_30d),
+            "human_attention" => left
+                .human_attention
+                .score
+                .partial_cmp(&right.human_attention.score)
+                .unwrap_or(std::cmp::Ordering::Equal),
             _ => left.total_clones.cmp(&right.total_clones),
         }
         .then_with(|| left.repository.name.cmp(&right.repository.name));
@@ -270,7 +297,7 @@ mod tests {
     #[test]
     fn sorts_descending_by_default() {
         let mut items = vec![summary("b", 1), summary("a", 2)];
-        sort_repositories(&mut items, None, None);
+        sort_repositories(&mut items, None, None, "clone_volume");
         assert_eq!(items[0].repository.name, "a");
     }
 
@@ -286,6 +313,7 @@ mod tests {
                 pull_requests: 0,
                 is_fork: false,
                 is_archived: false,
+                created_at: String::new(),
                 updated_at: String::new(),
             },
             total_views: 0,
@@ -298,6 +326,18 @@ mod tests {
             clone_rank: 1,
             clone_share_percent: 0.0,
             clone_daily_median: None,
+            human_attention: crate::models::HumanAttention {
+                version: "v1".into(),
+                score: None,
+                rank: None,
+                components: crate::models::HumanAttentionComponents {
+                    unique_views_7d: None,
+                    external_referrer_uniques_14d: None,
+                    new_stars_30d: None,
+                    new_forks_30d: None,
+                },
+            },
+            diagnoses: Vec::new(),
         }
     }
 
@@ -318,6 +358,7 @@ mod tests {
                     pull_requests: 0,
                     is_fork: false,
                     is_archived: false,
+                    created_at: "2026-08-01".into(),
                     updated_at: "2026-08-01".into(),
                 })
                 .await
@@ -355,6 +396,8 @@ mod tests {
         .expect("json");
         assert_eq!(json["total_count"], 1);
         assert_eq!(json["items"][0]["clone_rank"], 1);
+        assert_eq!(json["ranking"], "human_attention");
+        assert_eq!(json["items"][0]["human_attention"]["version"], "v1");
         assert_eq!(json["chart"][0]["total_clones"], 5);
         assert_eq!(json["chart"][0]["unique_cloners"], 2);
         assert_eq!(json["views_chart"][0]["count"], 15);
@@ -381,6 +424,7 @@ mod tests {
                     pull_requests: 0,
                     is_fork: false,
                     is_archived: false,
+                    created_at: "2026-08-01".into(),
                     updated_at: "2026-08-01".into(),
                 })
                 .await
@@ -425,6 +469,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         let record: serde_json::Value = serde_json::from_str(lines[0]).expect("jsonl record");
         assert_eq!(record["repository"]["name"], "carlok/alpha");
+        assert_eq!(record["repository"]["human_attention"]["version"], "v1");
     }
 
     #[tokio::test]
@@ -443,6 +488,7 @@ mod tests {
                 pull_requests: 0,
                 is_fork: false,
                 is_archived: false,
+                created_at: "2026-08-01".into(),
                 updated_at: "2026-08-01".into(),
             })
             .await
@@ -499,6 +545,7 @@ mod tests {
                     pull_requests: 0,
                     is_fork: false,
                     is_archived: false,
+                    created_at: "2026-08-01".into(),
                     updated_at: "2026-08-01".into(),
                 })
                 .await

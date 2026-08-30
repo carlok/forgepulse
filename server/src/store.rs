@@ -9,8 +9,8 @@ use sqlx::{
 
 use crate::{
     models::{
-        CloneChartPoint, DayPoint, PathPoint, ReferrerPoint, Repository, RepositorySummary,
-        StarPoint, SyncRun,
+        CloneChartPoint, DayPoint, Diagnosis, HumanAttention, HumanAttentionComponents, PathPoint,
+        ReferrerPoint, Repository, RepositorySummary, StarPoint, SyncRun,
     },
     stats,
 };
@@ -40,12 +40,13 @@ impl Store {
     pub async fn upsert_repository(&self, repository: &Repository) -> anyhow::Result<()> {
         sqlx::query(
             r#"INSERT INTO repositories
-              (name, description, stars, forks, watchers, issues, pull_requests, is_fork, is_archived, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (name, description, stars, forks, watchers, issues, pull_requests, is_fork, is_archived, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(name) DO UPDATE SET
                 description=excluded.description, stars=excluded.stars, forks=excluded.forks,
                 watchers=excluded.watchers, issues=excluded.issues, pull_requests=excluded.pull_requests,
-                is_fork=excluded.is_fork, is_archived=excluded.is_archived, updated_at=excluded.updated_at"#,
+                is_fork=excluded.is_fork, is_archived=excluded.is_archived,
+                created_at=excluded.created_at, updated_at=excluded.updated_at"#,
         )
         .bind(&repository.name)
         .bind(&repository.description)
@@ -56,6 +57,7 @@ impl Store {
         .bind(repository.pull_requests)
         .bind(repository.is_fork)
         .bind(repository.is_archived)
+        .bind(&repository.created_at)
         .bind(&repository.updated_at)
         .execute(&self.pool)
         .await?;
@@ -154,6 +156,53 @@ impl Store {
         Ok(())
     }
 
+    pub async fn upsert_fork(
+        &self,
+        repository_name: &str,
+        day: &str,
+        total: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"INSERT INTO fork_history (repository_name, day, total) VALUES (?, ?, ?)
+               ON CONFLICT(repository_name, day) DO UPDATE SET total=excluded.total"#,
+        )
+        .bind(repository_name)
+        .bind(day)
+        .bind(total)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_release_event(
+        &self,
+        repository_name: &str,
+        kind: &str,
+        name: &str,
+        occurred_on: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"INSERT INTO release_events (repository_name, kind, name, occurred_on) VALUES (?, ?, ?, ?)
+               ON CONFLICT(repository_name, kind, name) DO UPDATE SET occurred_on=excluded.occurred_on"#,
+        )
+        .bind(repository_name).bind(kind).bind(name).bind(occurred_on).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn upsert_actions_checkout_estimate(
+        &self,
+        repository_name: &str,
+        day: &str,
+        completed_jobs: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"INSERT INTO actions_checkout_snapshots (repository_name, captured_on, completed_checkout_jobs) VALUES (?, ?, ?)
+               ON CONFLICT(repository_name, captured_on) DO UPDATE SET completed_checkout_jobs=excluded.completed_checkout_jobs"#,
+        )
+        .bind(repository_name).bind(day).bind(completed_jobs).execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub async fn start_sync_run(&self) -> anyhow::Result<i64> {
         let result =
             sqlx::query("INSERT INTO sync_runs (started_at, status) VALUES (?, 'running')")
@@ -193,14 +242,17 @@ impl Store {
     ) -> anyhow::Result<Vec<RepositorySummary>> {
         let rows = sqlx::query_as::<_, SummaryRow>(
             r#"SELECT r.name, r.description, r.stars, r.forks, r.watchers, r.issues, r.pull_requests,
-                 r.is_fork, r.is_archived, r.updated_at,
+                 r.is_fork, r.is_archived, r.created_at, r.updated_at,
                  COALESCE(SUM(CASE WHEN d.metric='view' THEN d.count END), 0) AS total_views,
                  COALESCE(SUM(CASE WHEN d.metric='view' THEN d.uniques END), 0) AS total_view_uniques,
                  COALESCE(SUM(CASE WHEN d.metric='clone' THEN d.count END), 0) AS total_clones,
                  COALESCE(SUM(CASE WHEN d.metric='clone' THEN d.uniques END), 0) AS total_clone_uniques,
                  COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day >= date('now', '-1 day') THEN d.count END), 0) AS clones_1d,
                  COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day >= date('now', '-6 day') THEN d.count END), 0) AS clones_7d,
-                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day >= date('now', '-29 day') THEN d.count END), 0) AS clones_30d
+                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day >= date('now', '-29 day') THEN d.count END), 0) AS clones_30d,
+                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day >= date('now', '-29 day') THEN d.uniques END), 0) AS unique_cloners_30d,
+                 COALESCE(SUM(CASE WHEN d.metric='view' AND d.day >= date('now', '-29 day') THEN d.count END), 0) AS views_30d,
+                 COALESCE(SUM(CASE WHEN d.metric='view' AND d.day >= date('now', '-6 day') THEN d.uniques END), 0) AS unique_views_7d
                FROM repositories r LEFT JOIN daily_traffic d ON d.repository_name=r.name
                WHERE lower(r.name) LIKE lower(?)
                GROUP BY r.name ORDER BY total_clones DESC, r.name ASC"#,
@@ -220,9 +272,22 @@ impl Store {
                 previous_total = Some(row.total_clones);
             }
             let clone_daily_median = daily_medians.get(&row.name).copied();
+            let name = row.name.clone();
+            let created_at = row.created_at.clone();
+            let human_attention = self.human_attention(&name, row.unique_views_7d).await?;
+            let diagnoses = self
+                .diagnoses(
+                    &name,
+                    row.clones_1d,
+                    row.clones_30d,
+                    row.unique_cloners_30d,
+                    row.views_30d,
+                    &created_at,
+                )
+                .await?;
             summaries.push(RepositorySummary {
                 repository: Repository {
-                    name: row.name,
+                    name,
                     description: row.description,
                     stars: row.stars,
                     forks: row.forks,
@@ -231,6 +296,7 @@ impl Store {
                     pull_requests: row.pull_requests,
                     is_fork: row.is_fork,
                     is_archived: row.is_archived,
+                    created_at,
                     updated_at: row.updated_at,
                 },
                 total_views: row.total_views,
@@ -247,8 +313,11 @@ impl Store {
                     row.total_clones as f64 * 100.0 / total_clones as f64
                 },
                 clone_daily_median,
+                human_attention,
+                diagnoses,
             });
         }
+        assign_human_attention_ranks(&mut summaries);
         Ok(summaries)
     }
 
@@ -421,6 +490,144 @@ impl Store {
         .await?)
     }
 
+    pub async fn forks(&self, repository_name: &str) -> anyhow::Result<Vec<StarPoint>> {
+        Ok(sqlx::query_as(
+            "SELECT day, total FROM fork_history WHERE repository_name=? ORDER BY day",
+        )
+        .bind(repository_name)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    async fn human_attention(
+        &self,
+        repository_name: &str,
+        unique_views_7d: i64,
+    ) -> anyhow::Result<HumanAttention> {
+        let latest_referrer_snapshot: Option<String> = sqlx::query_scalar(
+            "SELECT MAX(captured_on) FROM referrer_snapshots WHERE repository_name=?",
+        )
+        .bind(repository_name)
+        .fetch_one(&self.pool)
+        .await?;
+        let external_referrer_uniques_14d = match latest_referrer_snapshot {
+            Some(captured_on) => Some(sqlx::query_scalar(
+                r#"SELECT COALESCE(SUM(uniques), 0) FROM referrer_snapshots
+                   WHERE repository_name=? AND captured_on=?
+                     AND lower(referrer) != 'github.com' AND lower(referrer) NOT LIKE '%.github.com'"#,
+            ).bind(repository_name).bind(captured_on).fetch_one(&self.pool).await?),
+            None => None,
+        };
+        let stars = self.history_delta("star_history", repository_name).await?;
+        let forks = self.history_delta("fork_history", repository_name).await?;
+        let components = HumanAttentionComponents {
+            unique_views_7d: Some(unique_views_7d),
+            external_referrer_uniques_14d,
+            new_stars_30d: stars,
+            new_forks_30d: forks,
+        };
+        let score = match (
+            &components.external_referrer_uniques_14d,
+            &components.new_stars_30d,
+            &components.new_forks_30d,
+        ) {
+            (Some(referrers), Some(stars), Some(forks)) => Some(
+                (unique_views_7d as f64).ln_1p()
+                    + 2.0 * (*referrers as f64).ln_1p()
+                    + 4.0 * (*stars as f64).ln_1p()
+                    + 6.0 * (*forks as f64).ln_1p(),
+            ),
+            _ => None,
+        };
+        Ok(HumanAttention {
+            version: "v1".into(),
+            score,
+            rank: None,
+            components,
+        })
+    }
+
+    async fn history_delta(
+        &self,
+        table: &str,
+        repository_name: &str,
+    ) -> anyhow::Result<Option<i64>> {
+        let cutoff = (Utc::now().date_naive() - Duration::days(30)).to_string();
+        let query = format!("SELECT total FROM {table} WHERE repository_name=? AND day=?");
+        let Some(baseline) = sqlx::query_scalar::<_, i64>(&query)
+            .bind(repository_name)
+            .bind(&cutoff)
+            .fetch_optional(&self.pool)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let query =
+            format!("SELECT total FROM {table} WHERE repository_name=? ORDER BY day DESC LIMIT 1");
+        let latest = sqlx::query_scalar::<_, i64>(&query)
+            .bind(repository_name)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(latest.map(|total| (total - baseline).max(0)))
+    }
+
+    async fn diagnoses(
+        &self,
+        repository_name: &str,
+        clones_1d: i64,
+        clones_30d: i64,
+        unique_cloners: i64,
+        views: i64,
+        created_at: &str,
+    ) -> anyhow::Result<Vec<Diagnosis>> {
+        let mut diagnoses = Vec::new();
+        let clone_burst = clones_30d >= 50
+            && views > 0
+            && clones_30d >= views * 4
+            && unique_cloners > 0
+            && clones_30d >= unique_cloners * 3
+            && clones_1d * 100 >= clones_30d * 80;
+        if clone_burst {
+            diagnoses.push(Diagnosis {
+                kind: "clone_burst".into(),
+                evidence: vec![
+                    format!("{clones_30d} clones in 30d"),
+                    format!("{views} views"),
+                    format!("{unique_cloners} unique cloners"),
+                    format!("{clones_1d} clones in the latest day"),
+                ],
+            });
+        }
+        let cutoff = (Utc::now().date_naive() - Duration::days(30)).to_string();
+        let recent_event: Option<String> = sqlx::query_scalar(
+            "SELECT kind || ' ' || name FROM release_events WHERE repository_name=? AND occurred_on >= ? ORDER BY occurred_on DESC LIMIT 1",
+        ).bind(repository_name).bind(&cutoff).fetch_optional(&self.pool).await?;
+        let recent_repository = NaiveDate::parse_from_str(created_at, "%Y-%m-%d")
+            .ok()
+            .is_some_and(|day| day >= Utc::now().date_naive() - Duration::days(7));
+        if recent_repository || recent_event.is_some() {
+            let evidence =
+                recent_event.unwrap_or_else(|| format!("repository created {created_at}"));
+            diagnoses.push(Diagnosis {
+                kind: "launch_shaped".into(),
+                evidence: vec![evidence],
+            });
+        }
+        let checkout_jobs: Option<i64> = sqlx::query_scalar(
+            "SELECT completed_checkout_jobs FROM actions_checkout_snapshots WHERE repository_name=? ORDER BY captured_on DESC LIMIT 1",
+        ).bind(repository_name).fetch_optional(&self.pool).await?;
+        if clone_burst && checkout_jobs.is_some_and(|jobs| jobs >= 50) {
+            diagnoses.push(Diagnosis {
+                kind: "automation_likely".into(),
+                evidence: vec![format!(
+                    "estimated {} completed jobs in workflows containing actions/checkout",
+                    checkout_jobs.unwrap_or_default()
+                )],
+            });
+        }
+        Ok(diagnoses)
+    }
+
     pub async fn seed_demo(&self) -> anyhow::Result<()> {
         let today = Utc::now().date_naive();
         for (name, stars, base) in [("carlok/forgepulse", 12, 20), ("carlok/metrics-lab", 4, 7)] {
@@ -434,6 +641,7 @@ impl Store {
                 pull_requests: 0,
                 is_fork: false,
                 is_archived: false,
+                created_at: today.to_string(),
                 updated_at: today.to_string(),
             })
             .await?;
@@ -446,6 +654,7 @@ impl Store {
                     .await?;
             }
             self.upsert_star(name, &today.to_string(), stars).await?;
+            self.upsert_fork(name, &today.to_string(), 1).await?;
         }
         Ok(())
     }
@@ -462,6 +671,7 @@ struct SummaryRow {
     pull_requests: i64,
     is_fork: bool,
     is_archived: bool,
+    created_at: String,
     updated_at: String,
     total_views: i64,
     total_view_uniques: i64,
@@ -470,6 +680,9 @@ struct SummaryRow {
     clones_1d: i64,
     clones_7d: i64,
     clones_30d: i64,
+    unique_cloners_30d: i64,
+    views_30d: i64,
+    unique_views_7d: i64,
 }
 
 #[derive(sqlx::FromRow)]
@@ -507,6 +720,25 @@ fn zero_fill(points: Vec<DayPoint>) -> Vec<DayPoint> {
     filled
 }
 
+fn assign_human_attention_ranks(summaries: &mut [RepositorySummary]) {
+    let mut ranked = summaries
+        .iter_mut()
+        .filter_map(|summary| summary.human_attention.score.map(|score| (score, summary)))
+        .collect::<Vec<_>>();
+    ranked.sort_by(|(left, _), (right, _)| {
+        right.partial_cmp(left).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut previous = None;
+    let mut rank = 0;
+    for (index, (score, summary)) in ranked.into_iter().enumerate() {
+        if previous != Some(score) {
+            rank = index + 1;
+            previous = Some(score);
+        }
+        summary.human_attention.rank = Some(rank);
+    }
+}
+
 pub fn statistics_for_chart(
     chart: &[CloneChartPoint],
 ) -> (
@@ -522,6 +754,104 @@ pub fn statistics_for_chart(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn human_attention_fixture_catalog_covers_requested_cases() {
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../tests/fixtures/human_attention_cases.json"))
+                .expect("fixture JSON");
+        assert_eq!(cases.len(), 5);
+        assert!(
+            cases
+                .iter()
+                .any(|case| case["name"] == "missing-star-fork-history")
+        );
+    }
+
+    #[tokio::test]
+    async fn human_attention_is_explainable_and_diagnoses_clone_bursts() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = Store::connect(&format!(
+            "sqlite:{}",
+            directory.path().join("traffic.db").display()
+        ))
+        .await
+        .expect("store");
+        let today = Utc::now().date_naive();
+        let name = "carlok/ci-heavy";
+        store
+            .upsert_repository(&Repository {
+                name: name.into(),
+                description: String::new(),
+                stars: 15,
+                forks: 3,
+                watchers: 0,
+                issues: 0,
+                pull_requests: 0,
+                is_fork: false,
+                is_archived: false,
+                created_at: (today - Duration::days(2)).to_string(),
+                updated_at: today.to_string(),
+            })
+            .await
+            .expect("repository");
+        store
+            .upsert_daily_traffic(name, &today.to_string(), "clone", 100, 20)
+            .await
+            .expect("clones");
+        store
+            .upsert_daily_traffic(name, &today.to_string(), "view", 10, 8)
+            .await
+            .expect("views");
+        store
+            .upsert_referrer(name, &today.to_string(), "example.com", 12, 7)
+            .await
+            .expect("referrer");
+        store
+            .upsert_star(name, &(today - Duration::days(30)).to_string(), 2)
+            .await
+            .expect("star baseline");
+        store
+            .upsert_star(name, &today.to_string(), 15)
+            .await
+            .expect("star latest");
+        store
+            .upsert_fork(name, &(today - Duration::days(30)).to_string(), 1)
+            .await
+            .expect("fork baseline");
+        store
+            .upsert_fork(name, &today.to_string(), 3)
+            .await
+            .expect("fork latest");
+        store
+            .upsert_actions_checkout_estimate(name, &today.to_string(), 80)
+            .await
+            .expect("actions");
+        let mut summaries = store.repository_summaries(name).await.expect("summary");
+        let summary = summaries.remove(0);
+        assert_eq!(summary.human_attention.version, "v1");
+        assert_eq!(summary.human_attention.components.new_stars_30d, Some(13));
+        assert_eq!(summary.human_attention.components.new_forks_30d, Some(2));
+        assert!(summary.human_attention.score.is_some());
+        assert!(
+            summary
+                .diagnoses
+                .iter()
+                .any(|diagnosis| diagnosis.kind == "clone_burst")
+        );
+        assert!(
+            summary
+                .diagnoses
+                .iter()
+                .any(|diagnosis| diagnosis.kind == "launch_shaped")
+        );
+        assert!(
+            summary
+                .diagnoses
+                .iter()
+                .any(|diagnosis| diagnosis.kind == "automation_likely")
+        );
+    }
 
     #[test]
     fn chart_fills_missing_calendar_days() {
@@ -557,6 +887,7 @@ mod tests {
                 pull_requests: 0,
                 is_fork: false,
                 is_archived: false,
+                created_at: "2026-08-01".into(),
                 updated_at: "2026-08-01".into(),
             })
             .await
@@ -593,6 +924,7 @@ mod tests {
                 pull_requests: 0,
                 is_fork: false,
                 is_archived: false,
+                created_at: "2026-08-01".into(),
                 updated_at: "2026-08-01".into(),
             })
             .await
@@ -619,6 +951,7 @@ mod tests {
                 pull_requests: 0,
                 is_fork: false,
                 is_archived: false,
+                created_at: "2026-08-01".into(),
                 updated_at: "2026-08-01".into(),
             })
             .await
@@ -671,6 +1004,7 @@ mod tests {
                     pull_requests: 0,
                     is_fork: false,
                     is_archived: false,
+                    created_at: "2026-08-01".into(),
                     updated_at: "2026-08-01".into(),
                 })
                 .await
@@ -759,6 +1093,7 @@ mod tests {
                     pull_requests: 0,
                     is_fork: false,
                     is_archived: false,
+                    created_at: "2026-08-01".into(),
                     updated_at: "2026-08-01".into(),
                 })
                 .await

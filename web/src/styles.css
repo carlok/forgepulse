@@ -171,6 +171,15 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
 .rank-share { text-align: right !important; }
 .rank-share span { display: block; }
 .rank-share span:last-child { color: var(--text-muted); font-size: .72rem; }
+.ranking-toggle { display: inline-flex; }
+.ranking-toggle button { border: var(--border-width-card) solid var(--color-border-strong); background: transparent; color: inherit; padding: 6px 8px; cursor: pointer; font-size: .7rem; font-weight: 700; }
+.ranking-toggle button:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.ranking-toggle button:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.ranking-toggle button.active { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+.diagnoses { display: grid; gap: 4px; margin-top: 5px; }
+.diagnosis-detail { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.diagnosis { color: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius-pill); padding: 2px 5px; font-size: .62rem; white-space: nowrap; }
+.diagnosis-detail small { font-size: .64rem; line-height: 1.25; }
 
 @media (max-width: 980px) {
   .detail-grid { grid-template-columns: 1fr; }

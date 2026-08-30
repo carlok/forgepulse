@@ -52,13 +52,15 @@ The server embeds no development source mount. Its static frontend is copied int
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/health` | Liveness check |
-| `GET /api/v1/dashboard?q=&sort=&dir=&page=&per_page=` | Scoped summaries, KPIs, clone chart, and both statistics payloads |
+| `GET /api/v1/dashboard?q=&ranking=human_attention\|clone_volume&sort=&dir=&page=&per_page=` | Scoped summaries, KPIs, charts, ranking explanations, and traffic diagnoses |
 | `GET /api/v1/repositories/{owner}/{repository}` | Stored repository traffic, referrers, paths, and stars |
 | `GET /api/v1/export.jsonl?q=` | One complete, scoped repository record per JSONL line |
 | `POST /api/v1/sync` | Trigger an authenticated collection run |
 | `GET /api/v1/sync-runs` | Most recent collection outcomes |
 
 Rank and clone share are evaluated within the same `q` scope as the dashboard and export. Equal total-clone counts receive the same competition rank (`1, 2, 2, 4`). The chart includes zero-filled days, and its statistics are calculated from those displayed daily values.
+
+The dashboard defaults to **Human attention**. Its versioned score uses unique views, external referrer uniques, and 30-day star/fork deltas; clone counts are excluded. Missing snapshot history is returned as `null` rather than zero. **Clone volume** preserves the original clone-based ranking. Traffic diagnoses are explanatory only and never alter raw metrics or either score.
 
 ## Backup and restore
 

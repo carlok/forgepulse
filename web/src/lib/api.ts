@@ -16,7 +16,18 @@ export interface RepositorySummary extends Repository {
   clone_rank: number;
   clone_share_percent: number;
   clone_daily_median: number | null;
+  human_attention: HumanAttention;
+  diagnoses: Diagnosis[];
 }
+
+export interface HumanAttentionComponents {
+  unique_views_7d: number | null;
+  external_referrer_uniques_14d: number | null;
+  new_stars_30d: number | null;
+  new_forks_30d: number | null;
+}
+export interface HumanAttention { version: string; score: number | null; rank: number | null; components: HumanAttentionComponents; }
+export interface Diagnosis { kind: string; evidence: string[]; }
 
 export interface CloneChartPoint {
   day: string;
@@ -40,6 +51,7 @@ export interface PathPoint { captured_on: string; path: string; title: string; c
 export interface StarPoint { day: string; total: number; }
 
 export interface Dashboard {
+  ranking: 'human_attention' | 'clone_volume';
   items: RepositorySummary[];
   total_count: number;
   total_stars: number;
@@ -60,6 +72,7 @@ export interface RepositoryDetail {
   referrers: ReferrerPoint[];
   paths: PathPoint[];
   stars: StarPoint[];
+  forks: StarPoint[];
 }
 
 export interface HealthStatus {
@@ -73,8 +86,8 @@ export async function loadHealth(): Promise<HealthStatus> {
   return response.json() as Promise<HealthStatus>;
 }
 
-export async function loadDashboard(query = '', page = 1, perPage = 25): Promise<Dashboard> {
-  const response = await fetch(`/api/v1/dashboard?q=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}`);
+export async function loadDashboard(query = '', page = 1, perPage = 25, ranking: 'human_attention' | 'clone_volume' = 'human_attention'): Promise<Dashboard> {
+  const response = await fetch(`/api/v1/dashboard?q=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}&ranking=${ranking}`);
   if (!response.ok) throw new Error(`Dashboard request failed: ${response.status}`);
   return response.json() as Promise<Dashboard>;
 }

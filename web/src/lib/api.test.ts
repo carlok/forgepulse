@@ -8,7 +8,7 @@ describe('dashboard API client', () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [] }) });
     vi.stubGlobal('fetch', fetchMock);
     await loadDashboard('owner/repo name');
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/dashboard?q=owner%2Frepo%20name&page=1&per_page=25');
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/dashboard?q=owner%2Frepo%20name&page=1&per_page=25&ranking=human_attention');
     expect(exportUrl('owner/repo name')).toBe('/api/v1/export.jsonl?q=owner%2Frepo%20name');
   });
 

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Context;
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
 use futures_util::{StreamExt, stream};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
@@ -30,6 +30,8 @@ struct GitHubRepository {
     open_issues_count: i64,
     fork: bool,
     archived: bool,
+    #[serde(default)]
+    created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +62,68 @@ struct PopularPath {
     title: String,
     count: i64,
     uniques: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    published_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubTag {
+    name: String,
+    commit: GitObject,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitObject {
+    sha: String,
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnnotatedTag {
+    tagger: Tagger,
+}
+
+#[derive(Debug, Deserialize)]
+struct Tagger {
+    date: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowRuns {
+    #[serde(default)]
+    workflow_runs: Vec<WorkflowRun>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowRun {
+    id: i64,
+    #[serde(default)]
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowJobs {
+    #[serde(default)]
+    jobs: Vec<WorkflowJob>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowJob {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    steps: Vec<WorkflowStep>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowStep {
+    #[serde(default)]
+    name: String,
 }
 
 impl GitHubCollector {
@@ -145,6 +209,7 @@ impl GitHubCollector {
                 pull_requests: pull_count,
                 is_fork: source.fork,
                 is_archived: source.archived,
+                created_at: day_from_timestamp(&source.created_at).unwrap_or_default(),
                 updated_at: today.clone(),
             })
             .await?;
@@ -217,7 +282,95 @@ impl GitHubCollector {
         store
             .upsert_star(&source.full_name, &today, source.stargazers_count)
             .await?;
+        store
+            .upsert_fork(&source.full_name, &today, source.forks_count)
+            .await?;
+        if let Ok(releases) = self
+            .get::<Vec<GitHubRelease>>(&format!(
+                "/repos/{}/releases?per_page=100",
+                source.full_name
+            ))
+            .await
+        {
+            for release in releases {
+                if let Some(published_at) = release.published_at {
+                    store
+                        .upsert_release_event(
+                            &source.full_name,
+                            "release",
+                            &release.tag_name,
+                            &day_from_timestamp(&published_at)?,
+                        )
+                        .await?;
+                }
+            }
+        }
+        if let Ok(tags) = self
+            .get::<Vec<GitHubTag>>(&format!("/repos/{}/tags?per_page=100", source.full_name))
+            .await
+        {
+            for tag in tags.into_iter().filter(|tag| tag.commit.kind == "tag") {
+                if let Ok(annotated) = self
+                    .get::<AnnotatedTag>(&format!(
+                        "/repos/{}/git/tags/{}",
+                        source.full_name, tag.commit.sha
+                    ))
+                    .await
+                {
+                    store
+                        .upsert_release_event(
+                            &source.full_name,
+                            "tag",
+                            &tag.name,
+                            &day_from_timestamp(&annotated.tagger.date)?,
+                        )
+                        .await?;
+                }
+            }
+        }
+        if let Ok(estimate) = self.checkout_job_estimate(&source.full_name).await {
+            store
+                .upsert_actions_checkout_estimate(&source.full_name, &today, estimate)
+                .await?;
+        }
         Ok(())
+    }
+
+    async fn checkout_job_estimate(&self, repository: &str) -> anyhow::Result<i64> {
+        let cutoff = Utc::now() - ChronoDuration::days(30);
+        let runs: WorkflowRuns = self
+            .get(&format!(
+                "/repos/{repository}/actions/runs?status=completed&per_page=100"
+            ))
+            .await?;
+        let mut estimate = 0;
+        for run in runs.workflow_runs {
+            let created = chrono::DateTime::parse_from_rfc3339(&run.created_at)
+                .ok()
+                .map(|date| date.with_timezone(&Utc));
+            if created.is_some_and(|date| date < cutoff) {
+                continue;
+            }
+            let jobs: WorkflowJobs = self
+                .get(&format!(
+                    "/repos/{repository}/actions/runs/{}/jobs?per_page=100",
+                    run.id
+                ))
+                .await?;
+            let uses_checkout = jobs.jobs.iter().any(|job| {
+                job.steps
+                    .iter()
+                    .any(|step| step.name.to_ascii_lowercase().contains("actions/checkout"))
+            });
+            if uses_checkout {
+                estimate += jobs
+                    .jobs
+                    .iter()
+                    .filter(|job| job.status == "completed")
+                    .count() as i64;
+            }
+        }
+        Ok(estimate)
     }
 
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> anyhow::Result<T> {
@@ -333,6 +486,7 @@ mod tests {
             open_issues_count: 0,
             fork: false,
             archived: false,
+            created_at: String::new(),
         }
     }
 
