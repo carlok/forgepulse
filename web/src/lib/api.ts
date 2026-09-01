@@ -86,8 +86,18 @@ export async function loadHealth(): Promise<HealthStatus> {
   return response.json() as Promise<HealthStatus>;
 }
 
-export async function loadDashboard(query = '', page = 1, perPage = 25, ranking: 'human_attention' | 'clone_volume' = 'human_attention'): Promise<Dashboard> {
-  const response = await fetch(`/api/v1/dashboard?q=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}&ranking=${ranking}`);
+export async function loadDashboard(
+  query = '',
+  page = 1,
+  perPage = 25,
+  ranking: 'human_attention' | 'clone_volume' = 'human_attention',
+  sort: string | null = null,
+  dir: 'asc' | 'desc' | null = null
+): Promise<Dashboard> {
+  let url = `/api/v1/dashboard?q=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}&ranking=${ranking}`;
+  if (sort) url += `&sort=${encodeURIComponent(sort)}`;
+  if (dir) url += `&dir=${dir}`;
+  const response = await fetch(url);
   if (!response.ok) throw new Error(`Dashboard request failed: ${response.status}`);
   return response.json() as Promise<Dashboard>;
 }

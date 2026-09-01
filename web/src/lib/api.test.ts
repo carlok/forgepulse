@@ -17,6 +17,13 @@ describe('dashboard API client', () => {
     await expect(loadDashboard()).rejects.toThrow('500');
   });
 
+  it('appends sort and dir only when given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [] }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await loadDashboard('', 1, 25, 'clone_volume', 'stars', 'asc');
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/dashboard?q=&page=1&per_page=25&ranking=clone_volume&sort=stars&dir=asc');
+  });
+
   it('loads an encoded repository detail endpoint', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ summary: {} }) });
     vi.stubGlobal('fetch', fetchMock);

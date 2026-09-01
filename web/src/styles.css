@@ -99,6 +99,9 @@ table { width: 100%; border-collapse: collapse; font-size: .82rem; }
 th, td { padding: 11px 12px; border-bottom: 1px solid var(--color-border); text-align: right; white-space: nowrap; }
 th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
 th { font-size: .69rem; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); }
+.sort-header { display: inline-flex; align-items: center; gap: 3px; background: none; border: none; padding: 0; margin: 0; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+.sort-header:hover { color: var(--accent); }
+.sort-header.active { color: var(--accent); }
 td:nth-child(2) { white-space: normal; min-width: 170px; }
 td strong, td small { display: block; }
 td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mono); color: var(--accent); font-weight: 700; }
