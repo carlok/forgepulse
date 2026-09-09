@@ -4,10 +4,11 @@
   import { flip } from 'svelte/animate';
   import * as echarts from 'echarts';
   import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Download, ExternalLink, GitBranch, Search, User } from '@lucide/svelte';
-  import { exportUrl, loadDashboard, loadHealth, loadRepository, type Dashboard, type RepositoryDetail } from './lib/api';
+  import { exportUrl, loadDashboard, loadHealth, loadRepository, loadSyncRuns, type Dashboard, type RepositoryDetail } from './lib/api';
   import { formatPercent, formatStatistic, ordinal, selectedStatistics, type StatisticMetric } from './lib/stats';
   import { CHART_COLORS } from './lib/theme';
   import { seriesValues, unionDays } from './lib/charts';
+  import { formatUpdatedAt } from './lib/time';
 
   let dashboard: Dashboard | null = null;
   let detail: RepositoryDetail | null = null;
@@ -26,6 +27,8 @@
   const PER_PAGE = 25;
   let page = 1;
   let gitRef = 'local';
+  let lastSyncedAt: string | null = null;
+  let now = Date.now();
 
   $: stats = dashboard ? selectedStatistics(metric, dashboard.total_clone_statistics, dashboard.unique_clone_statistics) : null;
   $: totalPages = dashboard ? Math.max(1, Math.ceil(dashboard.total_count / PER_PAGE)) : 1;
@@ -35,19 +38,25 @@
   // a fleet-wide daily figure). A single global threshold scoped to the current search, not
   // recomputed per page — it's expected for a whole page to land on one side of it.
   $: medianClones = dashboard?.repository_clone_daily_median ?? null;
+  $: syncStatusText = lastSyncedAt ? formatUpdatedAt(lastSyncedAt, new Date(now)) : null;
   $: if (chartElement && dashboard && !selectedRepository) renderDashboardChart();
   $: if (detailChartElement && detail && selectedRepository) renderRepositoryChart();
 
   onMount(() => {
     void loadCurrentPage();
     void loadHealth().then((health) => { gitRef = health.git_ref; }).catch(() => {});
+    void loadSyncRuns().then((runs) => {
+      lastSyncedAt = runs.find((run) => run.status === 'succeeded' && run.finished_at)?.finished_at ?? null;
+    }).catch(() => {});
     const resize = () => { chart?.resize(); detailChart?.resize(); };
     const popstate = () => { disposeCharts(); selectedRepository = repositoryFromPath(); void loadCurrentPage(); };
+    const clock = window.setInterval(() => { now = Date.now(); }, 60_000);
     window.addEventListener('resize', resize);
     window.addEventListener('popstate', popstate);
     return () => {
       window.removeEventListener('resize', resize);
       window.removeEventListener('popstate', popstate);
+      window.clearInterval(clock);
       chart?.dispose();
       detailChart?.dispose();
     };
@@ -231,7 +240,7 @@
         <div class="detail-grid"><section class="panel"><div class="panel-title"><h2>Top referrers</h2><span>{detail.referrers.length} stored</span></div><div class="scroll"><table><thead><tr><th>Referrer</th><th>Views</th><th>Unique</th></tr></thead><tbody>{#each detail.referrers as item}<tr><td>{#if referrerUrl(item.referrer)}<a class="repository-link" href={referrerUrl(item.referrer)} target="_blank" rel="noreferrer">{item.referrer}</a>{:else}{item.referrer}{/if}</td><td>{item.count}</td><td>{item.uniques}</td></tr>{:else}<tr><td colspan="3">No referrer snapshots yet.</td></tr>{/each}</tbody></table></div></section><section class="panel"><div class="panel-title"><h2>Popular paths</h2><span>{detail.paths.length} stored</span></div><div class="scroll"><table><thead><tr><th>Path</th><th>Views</th><th>Unique</th></tr></thead><tbody>{#each detail.paths as item}<tr><td><a class="repository-link" title={item.title} href={`https://github.com${item.path}`} target="_blank" rel="noreferrer">{item.path}</a></td><td>{item.count}</td><td>{item.uniques}</td></tr>{:else}<tr><td colspan="3">No path snapshots yet.</td></tr>{/each}</tbody></table></div></section></div>
       {:else}<p class="loading">Loading repository history…</p>{/if}
     {:else}
-      <header><div><span class="eyebrow">Analytics console</span><h1>Repositories</h1></div><span class="status">{gitRef}</span></header>
+      <header><div><span class="eyebrow">Analytics console</span><h1>Repositories</h1></div><div class="header-meta"><span class="status">{gitRef}</span>{#if syncStatusText}<span class="sync-status">{syncStatusText}</span>{/if}</div></header>
       <form on:submit|preventDefault={submitSearch} class="search"><input bind:value={query} placeholder="owner/repository" aria-label="Search repositories" />{#if query}<button type="button" class="secondary" on:click={clearSearch}>Cancel</button>{/if}<button><Search size={14} />Search</button></form>
       {#if error}<p class="error">{error}</p>{/if}
       {#if dashboard}

@@ -67,6 +67,8 @@ h1 { font-family: var(--font-display); letter-spacing: -.05em; font-size: 2.1rem
 .repository-title-link svg { flex-shrink: 0; opacity: .6; }
 h2 { font-family: var(--font-display); font-size: .95rem; letter-spacing: -.02em; }
 .status { font-size: .7rem; letter-spacing: .1em; font-weight: 800; color: var(--success); border: 1px solid var(--success); padding: 5px 7px; border-radius: var(--radius-pill); }
+.header-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.sync-status { font-size: .68rem; color: var(--text-muted); white-space: nowrap; }
 .search { display: flex; gap: 8px; max-width: 580px; margin-bottom: 22px; }
 .search input {
   flex: 1;
@@ -163,6 +165,7 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
   .kpis { grid-template-columns: 1fr 1fr; }
   .search { max-width: none; }
   .export-link { font-size: .68rem; padding: 7px; }
+  .sync-status { white-space: normal; text-align: right; }
   .site-footer { flex-direction: column; align-items: flex-start; padding: 12px 15px; }
 }
 

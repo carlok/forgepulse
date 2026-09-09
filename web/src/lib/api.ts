@@ -80,10 +80,25 @@ export interface HealthStatus {
   git_ref: string;
 }
 
+export interface SyncRun {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: 'running' | 'succeeded' | 'failed';
+  repositories_synced: number;
+  message: string | null;
+}
+
 export async function loadHealth(): Promise<HealthStatus> {
   const response = await fetch('/api/health');
   if (!response.ok) throw new Error(`Health request failed: ${response.status}`);
   return response.json() as Promise<HealthStatus>;
+}
+
+export async function loadSyncRuns(): Promise<SyncRun[]> {
+  const response = await fetch('/api/v1/sync-runs');
+  if (!response.ok) throw new Error(`Sync runs request failed: ${response.status}`);
+  return response.json() as Promise<SyncRun[]>;
 }
 
 export async function loadDashboard(

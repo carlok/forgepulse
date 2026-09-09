@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { exportUrl, loadDashboard, loadHealth, loadRepository } from './api';
+import { exportUrl, loadDashboard, loadHealth, loadRepository, loadSyncRuns } from './api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -41,5 +41,18 @@ describe('dashboard API client', () => {
   it('reports an HTTP error for health', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
     await expect(loadHealth()).rejects.toThrow('503');
+  });
+
+  it('loads sync runs', async () => {
+    const runs = [{ id: 1, started_at: '2026-09-09T12:00:00Z', finished_at: '2026-09-09T12:01:00Z', status: 'succeeded', repositories_synced: 5, message: null }];
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => runs });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(loadSyncRuns()).resolves.toEqual(runs);
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/sync-runs');
+  });
+
+  it('reports an HTTP error for sync runs', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+    await expect(loadSyncRuns()).rejects.toThrow('500');
   });
 });
