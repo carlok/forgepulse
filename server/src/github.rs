@@ -1,4 +1,10 @@
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::Context;
 use chrono::{Duration as ChronoDuration, Utc};
@@ -16,6 +22,17 @@ pub struct GitHubCollector {
     token: String,
     filter: String,
     base_url: String,
+    syncing: Arc<AtomicBool>,
+}
+
+/// Releases the single-flight guard when a sync finishes, however it returns —
+/// success, an early `?`, or a panic — so a crashed sync can't wedge every future one.
+struct SyncGuard(Arc<AtomicBool>);
+
+impl Drop for SyncGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,10 +158,20 @@ impl GitHubCollector {
             token,
             filter,
             base_url: base_url.trim_end_matches('/').to_string(),
+            syncing: Arc::new(AtomicBool::new(false)),
         })
     }
 
+    // The hourly scheduled sync and on-demand "Sync now" requests share this collector, so
+    // without a guard they can overlap: each does its own bounded, per-repo concurrent fetch
+    // (buffer_unordered), and running several of those at once multiplies GitHub API load
+    // enough to trip secondary rate limiting, which then slows every one of them down via
+    // their own retry backoff. Reject a second call instead of letting them contend.
     pub async fn sync(&self, store: &Store) -> anyhow::Result<usize> {
+        if self.syncing.swap(true, Ordering::SeqCst) {
+            anyhow::bail!("a sync is already in progress");
+        }
+        let _guard = SyncGuard(self.syncing.clone());
         let run_id = store.start_sync_run().await?;
         let outcome = self.sync_inner(store).await;
         match &outcome {
@@ -557,5 +584,31 @@ mod tests {
         let run = store.sync_runs().await.expect("runs").pop().expect("run");
         assert_eq!(run.status, "failed");
         assert!(run.message.is_some());
+    }
+
+    #[tokio::test]
+    async fn sync_rejects_a_second_call_while_one_is_already_running() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = format!("sqlite:{}", directory.path().join("traffic.db").display());
+        let store = Store::connect(&database).await.expect("store");
+        let collector = GitHubCollector::with_base_url(
+            "token".into(),
+            "carlok/*".into(),
+            &mock_server_url().await,
+        )
+        .expect("collector");
+
+        // Both calls are polled before either reaches an await point, so the guard's
+        // synchronous swap-and-check deterministically lets the first through and
+        // rejects the second — this isn't a timing-dependent race.
+        let (first, second) = tokio::join!(collector.sync(&store), collector.sync(&store));
+        assert!(first.is_ok());
+        assert_eq!(
+            second.unwrap_err().to_string(),
+            "a sync is already in progress"
+        );
+
+        // The guard releases once the first sync finishes, so a later call works normally.
+        assert!(collector.sync(&store).await.is_ok());
     }
 }
