@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { exportUrl, loadDashboard, loadHealth, loadRepository, loadSyncRuns } from './api';
+import { exportUrl, loadDashboard, loadHealth, loadRepository, loadSyncRuns, triggerSync } from './api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -54,5 +54,23 @@ describe('dashboard API client', () => {
   it('reports an HTTP error for sync runs', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }));
     await expect(loadSyncRuns()).rejects.toThrow('500');
+  });
+
+  it('triggers an on-demand sync', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'ok', repositories_synced: 84 }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(triggerSync()).resolves.toEqual({ status: 'ok', repositories_synced: 84 });
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/sync', { method: 'POST' });
+  });
+
+  it('surfaces the server-provided error message when a sync fails', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'HTTP status client error (401 Unauthorized)' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(triggerSync()).rejects.toThrow('HTTP status client error (401 Unauthorized)');
+  });
+
+  it('falls back to a generic message when a failed sync has no error body', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => { throw new Error('no body'); } }));
+    await expect(triggerSync()).rejects.toThrow('503');
   });
 });

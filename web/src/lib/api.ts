@@ -101,6 +101,23 @@ export async function loadSyncRuns(): Promise<SyncRun[]> {
   return response.json() as Promise<SyncRun[]>;
 }
 
+export interface SyncResult {
+  status: string;
+  repositories_synced: number;
+}
+
+export async function triggerSync(): Promise<SyncResult> {
+  const response = await fetch('/api/v1/sync', { method: 'POST' });
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
+      ? body.error
+      : `Sync request failed: ${response.status}`;
+    throw new Error(message);
+  }
+  return body as SyncResult;
+}
+
 export async function loadDashboard(
   query = '',
   page = 1,
