@@ -67,6 +67,18 @@ pub struct Diagnosis {
     pub evidence: Vec<String>,
 }
 
+/// Chart-position movement vs. yesterday's ranking, not a raw-value trend — a repo's
+/// `total_clones` only ever grows, so diffing rank (a relative ordering) is what stays
+/// meaningful even though the underlying totals are monotonic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RankTrend {
+    Up,
+    Down,
+    Stable,
+    Unknown,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RepositorySummary {
     #[serde(flatten)]
@@ -79,11 +91,13 @@ pub struct RepositorySummary {
     pub clones_7d: i64,
     pub clones_30d: i64,
     pub clone_rank: usize,
+    pub clone_rank_trend: RankTrend,
     pub clone_share_percent: f64,
     /// Median of this repository's own daily clone counts (zero-filled), so it's comparable to
     /// the fleet-wide daily median on the same basis. `None` when it has no clone history at all.
     pub clone_daily_median: Option<f64>,
     pub human_attention: HumanAttention,
+    pub attention_rank_trend: RankTrend,
     pub diagnoses: Vec<Diagnosis>,
 }
 

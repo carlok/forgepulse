@@ -179,9 +179,10 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
 .description { color: var(--text-muted); margin: -14px 0 22px; max-width: 760px; line-height: 1.5; }
 .detail-chart { height: 340px; padding: 4px; }
 .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
-.rank-share { text-align: right !important; }
+.rank-share { text-align: right !important; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
 .rank-share span { display: block; }
-.rank-share span:last-child { color: var(--text-muted); font-size: .72rem; }
+.rank-share .rank-secondary { color: var(--text-muted); font-size: .72rem; }
+.rank-trend { display: inline-flex; align-items: center; justify-content: flex-end; }
 .ranking-toggle { display: inline-flex; }
 .ranking-toggle button { border: var(--border-width-card) solid var(--color-border-strong); background: transparent; color: inherit; padding: 6px 8px; cursor: pointer; font-size: .7rem; font-weight: 700; }
 .ranking-toggle button:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }

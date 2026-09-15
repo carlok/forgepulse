@@ -5,6 +5,8 @@ export interface Repository {
   forks: number;
 }
 
+export type RankTrend = 'up' | 'down' | 'stable' | 'unknown';
+
 export interface RepositorySummary extends Repository {
   total_views: number;
   total_view_uniques: number;
@@ -14,9 +16,11 @@ export interface RepositorySummary extends Repository {
   clones_7d: number;
   clones_30d: number;
   clone_rank: number;
+  clone_rank_trend: RankTrend;
   clone_share_percent: number;
   clone_daily_median: number | null;
   human_attention: HumanAttention;
+  attention_rank_trend: RankTrend;
   diagnoses: Diagnosis[];
 }
 

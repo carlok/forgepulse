@@ -324,6 +324,7 @@ mod tests {
             clones_7d: 0,
             clones_30d: 0,
             clone_rank: 1,
+            clone_rank_trend: crate::models::RankTrend::Unknown,
             clone_share_percent: 0.0,
             clone_daily_median: None,
             human_attention: crate::models::HumanAttention {
@@ -337,6 +338,7 @@ mod tests {
                     new_forks_30d: None,
                 },
             },
+            attention_rank_trend: crate::models::RankTrend::Unknown,
             diagnoses: Vec::new(),
         }
     }

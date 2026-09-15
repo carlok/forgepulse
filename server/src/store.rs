@@ -10,7 +10,7 @@ use sqlx::{
 use crate::{
     models::{
         CloneChartPoint, DayPoint, Diagnosis, HumanAttention, HumanAttentionComponents, PathPoint,
-        ReferrerPoint, Repository, RepositorySummary, StarPoint, SyncRun,
+        RankTrend, ReferrerPoint, Repository, RepositorySummary, StarPoint, SyncRun,
     },
     stats,
 };
@@ -263,14 +263,14 @@ impl Store {
         let names = rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>();
         let daily_medians = self.repository_clone_daily_medians(&names).await?;
         let total_clones = rows.iter().map(|row| row.total_clones).sum::<i64>();
+        let clone_ranks = dense_rank_by_total(
+            rows.iter()
+                .map(|row| (row.name.clone(), row.total_clones))
+                .collect(),
+        );
         let mut summaries = Vec::with_capacity(rows.len());
-        let mut previous_total = None;
-        let mut rank = 0;
-        for (index, row) in rows.into_iter().enumerate() {
-            if previous_total != Some(row.total_clones) {
-                rank = index + 1;
-                previous_total = Some(row.total_clones);
-            }
+        for row in rows {
+            let rank = clone_ranks[&row.name];
             let clone_daily_median = daily_medians.get(&row.name).copied();
             let name = row.name.clone();
             let created_at = row.created_at.clone();
@@ -307,6 +307,7 @@ impl Store {
                 clones_7d: row.clones_7d,
                 clones_30d: row.clones_30d,
                 clone_rank: rank,
+                clone_rank_trend: RankTrend::Unknown,
                 clone_share_percent: if total_clones == 0 {
                     0.0
                 } else {
@@ -314,10 +315,12 @@ impl Store {
                 },
                 clone_daily_median,
                 human_attention,
+                attention_rank_trend: RankTrend::Unknown,
                 diagnoses,
             });
         }
         assign_human_attention_ranks(&mut summaries);
+        self.apply_rank_trends(&mut summaries, search).await?;
         Ok(summaries)
     }
 
@@ -504,10 +507,44 @@ impl Store {
         repository_name: &str,
         unique_views_7d: i64,
     ) -> anyhow::Result<HumanAttention> {
+        let today = Utc::now().date_naive().to_string();
+        let (external_referrer_uniques_14d, new_stars_30d, new_forks_30d) = self
+            .attention_components_as_of(repository_name, &today)
+            .await?;
+        let components = HumanAttentionComponents {
+            unique_views_7d: Some(unique_views_7d),
+            external_referrer_uniques_14d,
+            new_stars_30d,
+            new_forks_30d,
+        };
+        let score = attention_score(
+            unique_views_7d,
+            external_referrer_uniques_14d,
+            new_stars_30d,
+            new_forks_30d,
+        );
+        Ok(HumanAttention {
+            version: "v1".into(),
+            score,
+            rank: None,
+            components,
+        })
+    }
+
+    /// The 3 inputs to [`attention_score`] besides `unique_views_7d`, as they stood on `as_of`
+    /// (a `YYYY-MM-DD` date) — re-runnable for a past date since the underlying snapshot/history
+    /// tables are retained and day-keyed, which is what lets [`Self::apply_rank_trends`] compare
+    /// today's ranking to yesterday's without a dedicated history-of-ranks table.
+    async fn attention_components_as_of(
+        &self,
+        repository_name: &str,
+        as_of: &str,
+    ) -> anyhow::Result<(Option<i64>, Option<i64>, Option<i64>)> {
         let latest_referrer_snapshot: Option<String> = sqlx::query_scalar(
-            "SELECT MAX(captured_on) FROM referrer_snapshots WHERE repository_name=?",
+            "SELECT MAX(captured_on) FROM referrer_snapshots WHERE repository_name=? AND captured_on<=?",
         )
         .bind(repository_name)
+        .bind(as_of)
         .fetch_one(&self.pool)
         .await?;
         let external_referrer_uniques_14d = match latest_referrer_snapshot {
@@ -518,41 +555,24 @@ impl Store {
             ).bind(repository_name).bind(captured_on).fetch_one(&self.pool).await?),
             None => None,
         };
-        let stars = self.history_delta("star_history", repository_name).await?;
-        let forks = self.history_delta("fork_history", repository_name).await?;
-        let components = HumanAttentionComponents {
-            unique_views_7d: Some(unique_views_7d),
-            external_referrer_uniques_14d,
-            new_stars_30d: stars,
-            new_forks_30d: forks,
-        };
-        let score = match (
-            &components.external_referrer_uniques_14d,
-            &components.new_stars_30d,
-            &components.new_forks_30d,
-        ) {
-            (Some(referrers), Some(stars), Some(forks)) => Some(
-                (unique_views_7d as f64).ln_1p()
-                    + 2.0 * (*referrers as f64).ln_1p()
-                    + 4.0 * (*stars as f64).ln_1p()
-                    + 6.0 * (*forks as f64).ln_1p(),
-            ),
-            _ => None,
-        };
-        Ok(HumanAttention {
-            version: "v1".into(),
-            score,
-            rank: None,
-            components,
-        })
+        let stars = self
+            .history_delta_as_of("star_history", repository_name, as_of)
+            .await?;
+        let forks = self
+            .history_delta_as_of("fork_history", repository_name, as_of)
+            .await?;
+        Ok((external_referrer_uniques_14d, stars, forks))
     }
 
-    async fn history_delta(
+    async fn history_delta_as_of(
         &self,
         table: &str,
         repository_name: &str,
+        as_of: &str,
     ) -> anyhow::Result<Option<i64>> {
-        let cutoff = (Utc::now().date_naive() - Duration::days(30)).to_string();
+        let cutoff = (NaiveDate::parse_from_str(as_of, "%Y-%m-%d").context("parse as_of date")?
+            - Duration::days(30))
+        .to_string();
         let query = format!("SELECT total FROM {table} WHERE repository_name=? AND day=?");
         let Some(baseline) = sqlx::query_scalar::<_, i64>(&query)
             .bind(repository_name)
@@ -562,10 +582,14 @@ impl Store {
         else {
             return Ok(None);
         };
-        let query =
-            format!("SELECT total FROM {table} WHERE repository_name=? ORDER BY day DESC LIMIT 1");
+        // Bounded by `as_of`, not just "the latest row ever" — required once `as_of` can be
+        // "yesterday", or a row inserted for today would leak into yesterday's delta.
+        let query = format!(
+            "SELECT total FROM {table} WHERE repository_name=? AND day<=? ORDER BY day DESC LIMIT 1"
+        );
         let latest = sqlx::query_scalar::<_, i64>(&query)
             .bind(repository_name)
+            .bind(as_of)
             .fetch_optional(&self.pool)
             .await?;
         Ok(latest.map(|total| (total - baseline).max(0)))
@@ -658,6 +682,90 @@ impl Store {
         }
         Ok(())
     }
+
+    async fn clone_totals_as_of(
+        &self,
+        search: &str,
+        as_of: &str,
+    ) -> anyhow::Result<BTreeMap<String, i64>> {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            r#"SELECT r.name,
+                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day<=? THEN d.count END), 0) AS total_clones
+               FROM repositories r LEFT JOIN daily_traffic d ON d.repository_name=r.name
+               WHERE lower(r.name) LIKE lower(?)
+               GROUP BY r.name"#,
+        )
+        .bind(as_of)
+        .bind(format!("%{}%", search.trim()))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    async fn attention_scores_as_of(
+        &self,
+        search: &str,
+        as_of: &str,
+    ) -> anyhow::Result<BTreeMap<String, Option<f64>>> {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            r#"SELECT r.name,
+                 COALESCE(SUM(CASE WHEN d.metric='view' AND d.day<=? AND d.day>=date(?, '-6 day') THEN d.uniques END), 0) AS unique_views_7d
+               FROM repositories r LEFT JOIN daily_traffic d ON d.repository_name=r.name
+               WHERE lower(r.name) LIKE lower(?)
+               GROUP BY r.name"#,
+        )
+        .bind(as_of)
+        .bind(as_of)
+        .bind(format!("%{}%", search.trim()))
+        .fetch_all(&self.pool)
+        .await?;
+        let mut scores = BTreeMap::new();
+        for (name, unique_views_7d) in rows {
+            let (referrers, stars, forks) = self.attention_components_as_of(&name, as_of).await?;
+            scores.insert(
+                name,
+                attention_score(unique_views_7d, referrers, stars, forks),
+            );
+        }
+        Ok(scores)
+    }
+
+    /// Sets `clone_rank_trend`/`attention_rank_trend` on every summary by comparing today's
+    /// rank (already computed) to a from-scratch re-ranking as of yesterday, scoped by the same
+    /// `search` filter so the two rankings are over the same set of repositories.
+    async fn apply_rank_trends(
+        &self,
+        summaries: &mut [RepositorySummary],
+        search: &str,
+    ) -> anyhow::Result<()> {
+        let yesterday = (Utc::now().date_naive() - Duration::days(1)).to_string();
+        let yesterday_clone_ranks =
+            dense_rank_by_total(self.clone_totals_as_of(search, &yesterday).await?);
+        let yesterday_attention_ranks =
+            dense_rank_by_score(self.attention_scores_as_of(search, &yesterday).await?);
+
+        for summary in summaries.iter_mut() {
+            let name = summary.repository.name.clone();
+            let existed = existed_as_of(&summary.repository.created_at, &yesterday);
+
+            summary.clone_rank_trend = match (existed, yesterday_clone_ranks.get(&name)) {
+                (true, Some(&yesterday_rank)) => compare_rank(summary.clone_rank, yesterday_rank),
+                _ => RankTrend::Unknown,
+            };
+
+            summary.attention_rank_trend = match (
+                existed,
+                summary.human_attention.rank,
+                yesterday_attention_ranks.get(&name),
+            ) {
+                (true, Some(today_rank), Some(&yesterday_rank)) => {
+                    compare_rank(today_rank, yesterday_rank)
+                }
+                _ => RankTrend::Unknown,
+            };
+        }
+        Ok(())
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -721,21 +829,104 @@ fn zero_fill(points: Vec<DayPoint>) -> Vec<DayPoint> {
 }
 
 fn assign_human_attention_ranks(summaries: &mut [RepositorySummary]) {
-    let mut ranked = summaries
-        .iter_mut()
-        .filter_map(|summary| summary.human_attention.score.map(|score| (score, summary)))
-        .collect::<Vec<_>>();
-    ranked.sort_by(|(left, _), (right, _)| {
-        right.partial_cmp(left).unwrap_or(std::cmp::Ordering::Equal)
+    let scores = summaries
+        .iter()
+        .map(|summary| {
+            (
+                summary.repository.name.clone(),
+                summary.human_attention.score,
+            )
+        })
+        .collect();
+    let ranks = dense_rank_by_score(scores);
+    for summary in summaries.iter_mut() {
+        summary.human_attention.rank = ranks.get(&summary.repository.name).copied();
+    }
+}
+
+/// Same ln_1p-weighted formula `human_attention` has always used — extracted so it isn't
+/// duplicated between "as of today" and "as of yesterday" (`attention_scores_as_of`).
+fn attention_score(
+    unique_views_7d: i64,
+    external_referrer_uniques_14d: Option<i64>,
+    new_stars_30d: Option<i64>,
+    new_forks_30d: Option<i64>,
+) -> Option<f64> {
+    match (external_referrer_uniques_14d, new_stars_30d, new_forks_30d) {
+        (Some(referrers), Some(stars), Some(forks)) => Some(
+            (unique_views_7d as f64).ln_1p()
+                + 2.0 * (referrers as f64).ln_1p()
+                + 4.0 * (stars as f64).ln_1p()
+                + 6.0 * (forks as f64).ln_1p(),
+        ),
+        _ => None,
+    }
+}
+
+/// Dense rank (ties share a rank, next rank skips ahead) descending by total, `name` breaking
+/// ties — the same tiebreak `repository_summaries`'s SQL `ORDER BY` already used, now shared so
+/// today's and yesterday's rankings break ties identically (otherwise a tie could show a
+/// spurious up/down purely from ordering, not a real change).
+fn dense_rank_by_total(totals: BTreeMap<String, i64>) -> BTreeMap<String, usize> {
+    let mut ordered = totals.into_iter().collect::<Vec<_>>();
+    ordered.sort_by(|(left_name, left_total), (right_name, right_total)| {
+        right_total
+            .cmp(left_total)
+            .then_with(|| left_name.cmp(right_name))
     });
+    let mut ranks = BTreeMap::new();
     let mut previous = None;
     let mut rank = 0;
-    for (index, (score, summary)) in ranked.into_iter().enumerate() {
+    for (index, (name, total)) in ordered.into_iter().enumerate() {
+        if previous != Some(total) {
+            rank = index + 1;
+            previous = Some(total);
+        }
+        ranks.insert(name, rank);
+    }
+    ranks
+}
+
+/// Same dense-rank shape as [`dense_rank_by_total`], but descending by an optional score —
+/// repositories with no score (`None`) are left unranked rather than sorted to one end.
+fn dense_rank_by_score(scores: BTreeMap<String, Option<f64>>) -> BTreeMap<String, usize> {
+    let mut ordered = scores
+        .into_iter()
+        .filter_map(|(name, score)| score.map(|score| (name, score)))
+        .collect::<Vec<_>>();
+    ordered.sort_by(|(left_name, left_score), (right_name, right_score)| {
+        right_score
+            .partial_cmp(left_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left_name.cmp(right_name))
+    });
+    let mut ranks = BTreeMap::new();
+    let mut previous = None;
+    let mut rank = 0;
+    for (index, (name, score)) in ordered.into_iter().enumerate() {
         if previous != Some(score) {
             rank = index + 1;
             previous = Some(score);
         }
-        summary.human_attention.rank = Some(rank);
+        ranks.insert(name, rank);
+    }
+    ranks
+}
+
+/// Whether a repository's stored `created_at` (a `YYYY-MM-DD` date, possibly empty/unparseable
+/// for older rows) is on or before `as_of` — an unparseable date is treated as "existed", the
+/// same lenient convention `diagnoses`'s recency check already uses for this same column.
+fn existed_as_of(created_at: &str, as_of: &str) -> bool {
+    NaiveDate::parse_from_str(created_at, "%Y-%m-%d")
+        .ok()
+        .is_none_or(|day| day.to_string().as_str() <= as_of)
+}
+
+fn compare_rank(today: usize, yesterday: usize) -> RankTrend {
+    match today.cmp(&yesterday) {
+        std::cmp::Ordering::Less => RankTrend::Up,
+        std::cmp::Ordering::Greater => RankTrend::Down,
+        std::cmp::Ordering::Equal => RankTrend::Stable,
     }
 }
 
@@ -1111,5 +1302,302 @@ mod tests {
             .map(|summary| summary.clone_rank)
             .collect::<Vec<_>>();
         assert_eq!(ranks, vec![1, 2, 2, 4]);
+    }
+
+    #[test]
+    fn dense_rank_breaks_ties_by_name_and_skips_ranks_after_a_tie() {
+        let totals = BTreeMap::from([
+            ("b".to_string(), 5),
+            ("a".to_string(), 5),
+            ("c".to_string(), 1),
+        ]);
+        let ranks = dense_rank_by_total(totals);
+        assert_eq!(ranks["a"], 1);
+        assert_eq!(ranks["b"], 1);
+        assert_eq!(ranks["c"], 3);
+    }
+
+    #[test]
+    fn dense_rank_by_total_of_empty_map_is_empty() {
+        assert!(dense_rank_by_total(BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn dense_rank_by_score_omits_repositories_with_no_score() {
+        let scores = BTreeMap::from([
+            ("scored".to_string(), Some(4.0)),
+            ("unscored".to_string(), None),
+        ]);
+        let ranks = dense_rank_by_score(scores);
+        assert_eq!(ranks["scored"], 1);
+        assert!(!ranks.contains_key("unscored"));
+    }
+
+    #[test]
+    fn compare_rank_reports_up_down_and_stable() {
+        assert_eq!(compare_rank(1, 2), RankTrend::Up);
+        assert_eq!(compare_rank(2, 1), RankTrend::Down);
+        assert_eq!(compare_rank(3, 3), RankTrend::Stable);
+    }
+
+    #[test]
+    fn existed_as_of_treats_an_unparseable_date_as_having_existed() {
+        assert!(existed_as_of("", "2026-09-14"));
+        assert!(existed_as_of("2026-09-01", "2026-09-14"));
+        assert!(!existed_as_of("2026-09-14", "2026-09-13"));
+    }
+
+    async fn insert_bare_repository(store: &Store, name: &str, created_at: &str) {
+        store
+            .upsert_repository(&Repository {
+                name: name.into(),
+                description: String::new(),
+                stars: 0,
+                forks: 0,
+                watchers: 0,
+                issues: 0,
+                pull_requests: 0,
+                is_fork: false,
+                is_archived: false,
+                created_at: created_at.into(),
+                updated_at: created_at.into(),
+            })
+            .await
+            .expect("repository");
+    }
+
+    #[tokio::test]
+    async fn clone_rank_trend_reflects_an_overtake_since_yesterday() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = Store::connect(&format!(
+            "sqlite:{}",
+            directory.path().join("traffic.db").display()
+        ))
+        .await
+        .expect("store");
+        let today = Utc::now().date_naive();
+        let yesterday = today - Duration::days(1);
+        let old = (today - Duration::days(60)).to_string();
+
+        // "climber" trails as of yesterday, then gets a burst of clones today and overtakes.
+        insert_bare_repository(&store, "carlok/climber", &old).await;
+        store
+            .upsert_daily_traffic("carlok/climber", &yesterday.to_string(), "clone", 5, 0)
+            .await
+            .expect("clones");
+        store
+            .upsert_daily_traffic("carlok/climber", &today.to_string(), "clone", 100, 0)
+            .await
+            .expect("clones");
+
+        // "leader" is ahead as of yesterday and gets nothing new today, so it falls behind.
+        insert_bare_repository(&store, "carlok/leader", &old).await;
+        store
+            .upsert_daily_traffic("carlok/leader", &yesterday.to_string(), "clone", 10, 0)
+            .await
+            .expect("clones");
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        let climber = summaries
+            .iter()
+            .find(|summary| summary.repository.name == "carlok/climber")
+            .expect("climber");
+        let leader = summaries
+            .iter()
+            .find(|summary| summary.repository.name == "carlok/leader")
+            .expect("leader");
+        assert_eq!(climber.clone_rank_trend, RankTrend::Up);
+        assert_eq!(leader.clone_rank_trend, RankTrend::Down);
+    }
+
+    #[tokio::test]
+    async fn clone_rank_trend_is_stable_when_order_is_unchanged() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = Store::connect(&format!(
+            "sqlite:{}",
+            directory.path().join("traffic.db").display()
+        ))
+        .await
+        .expect("store");
+        let today = Utc::now().date_naive();
+        let old = (today - Duration::days(60)).to_string();
+
+        insert_bare_repository(&store, "carlok/steady-a", &old).await;
+        store
+            .upsert_daily_traffic("carlok/steady-a", &old, "clone", 100, 0)
+            .await
+            .expect("clones");
+        insert_bare_repository(&store, "carlok/steady-b", &old).await;
+        store
+            .upsert_daily_traffic("carlok/steady-b", &old, "clone", 50, 0)
+            .await
+            .expect("clones");
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        assert!(
+            summaries
+                .iter()
+                .all(|summary| summary.clone_rank_trend == RankTrend::Stable)
+        );
+    }
+
+    #[tokio::test]
+    async fn clone_rank_trend_is_unknown_for_a_repository_created_today() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = Store::connect(&format!(
+            "sqlite:{}",
+            directory.path().join("traffic.db").display()
+        ))
+        .await
+        .expect("store");
+        let today = Utc::now().date_naive().to_string();
+
+        insert_bare_repository(&store, "carlok/brand-new", &today).await;
+        store
+            .upsert_daily_traffic("carlok/brand-new", &today, "clone", 50, 0)
+            .await
+            .expect("clones");
+
+        let mut summaries = store.repository_summaries("").await.expect("summaries");
+        let summary = summaries.remove(0);
+        assert_eq!(summary.clone_rank_trend, RankTrend::Unknown);
+    }
+
+    #[tokio::test]
+    async fn attention_rank_trend_is_unknown_when_yesterdays_baseline_row_is_missing() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = Store::connect(&format!(
+            "sqlite:{}",
+            directory.path().join("traffic.db").display()
+        ))
+        .await
+        .expect("store");
+        let today = Utc::now().date_naive();
+        let old = (today - Duration::days(60)).to_string();
+        let name = "carlok/fresh-history";
+
+        insert_bare_repository(&store, name, &old).await;
+        store
+            .upsert_referrer(
+                name,
+                &(today - Duration::days(1)).to_string(),
+                "example.com",
+                5,
+                3,
+            )
+            .await
+            .expect("referrer");
+        // Only a baseline exactly 30 days before *today* exists — 30 days before *yesterday*
+        // (one day earlier) has no row, so the "as of yesterday" score can't be computed.
+        store
+            .upsert_star(name, &(today - Duration::days(30)).to_string(), 1)
+            .await
+            .expect("star baseline");
+        store
+            .upsert_fork(name, &(today - Duration::days(30)).to_string(), 1)
+            .await
+            .expect("fork baseline");
+
+        let mut summaries = store.repository_summaries("").await.expect("summaries");
+        let summary = summaries.remove(0);
+        assert!(summary.human_attention.score.is_some());
+        assert_eq!(summary.attention_rank_trend, RankTrend::Unknown);
+    }
+
+    #[tokio::test]
+    async fn attention_rank_trend_reflects_a_score_order_flip_since_yesterday() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = Store::connect(&format!(
+            "sqlite:{}",
+            directory.path().join("traffic.db").display()
+        ))
+        .await
+        .expect("store");
+        let today = Utc::now().date_naive();
+        let yesterday = today - Duration::days(1);
+        let old = (today - Duration::days(60)).to_string();
+
+        // "riser": flat referrers, flat (zero-delta) stars, and a fork count that jumps only as
+        // of today — its score should overtake "steady" today despite trailing yesterday.
+        insert_bare_repository(&store, "carlok/riser", &old).await;
+        store
+            .upsert_referrer("carlok/riser", &yesterday.to_string(), "example.com", 5, 2)
+            .await
+            .expect("referrer");
+        store
+            .upsert_star("carlok/riser", &(today - Duration::days(31)).to_string(), 0)
+            .await
+            .expect("star baseline (yesterday)");
+        store
+            .upsert_star("carlok/riser", &(today - Duration::days(30)).to_string(), 0)
+            .await
+            .expect("star baseline (today)");
+        store
+            .upsert_fork("carlok/riser", &(today - Duration::days(31)).to_string(), 1)
+            .await
+            .expect("fork baseline (yesterday)");
+        store
+            .upsert_fork("carlok/riser", &(today - Duration::days(30)).to_string(), 1)
+            .await
+            .expect("fork baseline (today)");
+        store
+            .upsert_fork("carlok/riser", &today.to_string(), 6)
+            .await
+            .expect("fork burst (today only)");
+
+        // "steady": a constant view count and nothing else, so its score never moves.
+        insert_bare_repository(&store, "carlok/steady", &old).await;
+        store
+            .upsert_daily_traffic("carlok/steady", &yesterday.to_string(), "view", 0, 50)
+            .await
+            .expect("views");
+        store
+            .upsert_referrer("carlok/steady", &yesterday.to_string(), "github.com", 5, 5)
+            .await
+            .expect("referrer (filtered out, just establishes a snapshot day)");
+        store
+            .upsert_star(
+                "carlok/steady",
+                &(today - Duration::days(31)).to_string(),
+                0,
+            )
+            .await
+            .expect("star baseline (yesterday)");
+        store
+            .upsert_star(
+                "carlok/steady",
+                &(today - Duration::days(30)).to_string(),
+                0,
+            )
+            .await
+            .expect("star baseline (today)");
+        store
+            .upsert_fork(
+                "carlok/steady",
+                &(today - Duration::days(31)).to_string(),
+                0,
+            )
+            .await
+            .expect("fork baseline (yesterday)");
+        store
+            .upsert_fork(
+                "carlok/steady",
+                &(today - Duration::days(30)).to_string(),
+                0,
+            )
+            .await
+            .expect("fork baseline (today)");
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        let riser = summaries
+            .iter()
+            .find(|summary| summary.repository.name == "carlok/riser")
+            .expect("riser");
+        let steady = summaries
+            .iter()
+            .find(|summary| summary.repository.name == "carlok/steady")
+            .expect("steady");
+        assert_eq!(riser.attention_rank_trend, RankTrend::Up);
+        assert_eq!(steady.attention_rank_trend, RankTrend::Down);
     }
 }
