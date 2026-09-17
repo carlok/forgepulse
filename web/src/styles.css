@@ -154,7 +154,22 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
 
 @media (max-width: 980px) {
   main { grid-template-columns: 1fr; }
-  aside { min-height: auto; flex-direction: row; align-items: center; gap: 18px; }
+  /* Below the sidebar breakpoint it's really just the page's first row, not a separate
+     panel — drop the boxed background/border so it reads as part of the main content flow. */
+  aside {
+    min-height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 22px;
+    background: transparent;
+    border-right: none;
+    border-bottom: var(--border-width-card) solid var(--color-border);
+  }
+  /* The description is what forces this row to wrap onto a second, mostly-empty line at
+     narrower widths — drop it here so brand, project link and export button stay one slim
+     row that reads as the page's first row rather than a separate boxed panel. */
+  aside p { display: none; }
   .export-link { margin: 0 0 0 auto; }
   .content { padding: 22px; }
   .grid { grid-template-columns: 1fr; }
@@ -162,9 +177,11 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
   .site-footer { padding: 14px 22px; }
 }
 @media (max-width: 560px) {
-  aside { padding: 15px; }
+  aside { padding: 12px 15px; gap: 10px; }
   .brand { font-size: 1.2rem; }
-  aside p { display: none; }
+  /* The footer already links to the GitHub project, so drop the duplicate link here to keep
+     this row to a single line instead of wrapping under the brand. */
+  .project-link { display: none; }
   .content { padding: 15px; }
   h1 { font-size: 1.7rem; }
   .kpis { grid-template-columns: 1fr 1fr; }
