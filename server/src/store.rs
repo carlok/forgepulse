@@ -683,23 +683,42 @@ impl Store {
         Ok(())
     }
 
-    async fn clone_totals_as_of(
+    /// Clone totals as of one day before each repository's OWN most recent clone data,
+    /// alongside whether that repository already existed by then. GitHub's traffic API
+    /// reports "today" (UTC) inconsistently — at any given moment some repositories already
+    /// have a same-day row and most don't — so there's no single fleet-wide cutoff date that's
+    /// simultaneously "yesterday" for every repository. Anchoring to each repository's own
+    /// freshest day instead makes the comparison correct regardless of how any *other*
+    /// repository happens to be lagging.
+    async fn clone_totals_one_day_before_latest(
         &self,
         search: &str,
-        as_of: &str,
-    ) -> anyhow::Result<BTreeMap<String, i64>> {
-        let rows: Vec<(String, i64)> = sqlx::query_as(
-            r#"SELECT r.name,
-                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day<=? THEN d.count END), 0) AS total_clones
-               FROM repositories r LEFT JOIN daily_traffic d ON d.repository_name=r.name
-               WHERE lower(r.name) LIKE lower(?)
-               GROUP BY r.name"#,
+    ) -> anyhow::Result<BTreeMap<String, (i64, bool)>> {
+        let rows: Vec<(String, i64, bool)> = sqlx::query_as(
+            r#"WITH latest AS (
+                   SELECT repository_name, MAX(day) AS latest_day
+                   FROM daily_traffic WHERE metric='clone'
+                   GROUP BY repository_name
+                 )
+                 SELECT r.name,
+                   COALESCE(SUM(CASE
+                     WHEN d.metric='clone' AND l.latest_day IS NOT NULL
+                       AND d.day <= date(l.latest_day, '-1 day')
+                     THEN d.count END), 0) AS total_clones,
+                   (l.latest_day IS NOT NULL AND r.created_at <= date(l.latest_day, '-1 day')) AS existed
+                 FROM repositories r
+                 LEFT JOIN daily_traffic d ON d.repository_name=r.name
+                 LEFT JOIN latest l ON l.repository_name=r.name
+                 WHERE lower(r.name) LIKE lower(?)
+                 GROUP BY r.name"#,
         )
-        .bind(as_of)
         .bind(format!("%{}%", search.trim()))
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().collect())
+        Ok(rows
+            .into_iter()
+            .map(|(name, total, existed)| (name, (total, existed)))
+            .collect())
     }
 
     async fn attention_scores_as_of(
@@ -738,23 +757,34 @@ impl Store {
         summaries: &mut [RepositorySummary],
         search: &str,
     ) -> anyhow::Result<()> {
-        let yesterday = (Utc::now().date_naive() - Duration::days(1)).to_string();
-        let yesterday_clone_ranks =
-            dense_rank_by_total(self.clone_totals_as_of(search, &yesterday).await?);
-        let yesterday_attention_ranks =
-            dense_rank_by_score(self.attention_scores_as_of(search, &yesterday).await?);
+        let calendar_yesterday = (Utc::now().date_naive() - Duration::days(1)).to_string();
+        let clone_baseline = self.clone_totals_one_day_before_latest(search).await?;
+        let yesterday_clone_ranks = dense_rank_by_total(
+            clone_baseline
+                .iter()
+                .map(|(name, &(total, _))| (name.clone(), total))
+                .collect(),
+        );
+        let yesterday_attention_ranks = dense_rank_by_score(
+            self.attention_scores_as_of(search, &calendar_yesterday)
+                .await?,
+        );
 
         for summary in summaries.iter_mut() {
             let name = summary.repository.name.clone();
-            let existed = existed_as_of(&summary.repository.created_at, &yesterday);
 
-            summary.clone_rank_trend = match (existed, yesterday_clone_ranks.get(&name)) {
+            let clone_existed = clone_baseline
+                .get(&name)
+                .is_some_and(|&(_, existed)| existed);
+            summary.clone_rank_trend = match (clone_existed, yesterday_clone_ranks.get(&name)) {
                 (true, Some(&yesterday_rank)) => compare_rank(summary.clone_rank, yesterday_rank),
                 _ => RankTrend::Unknown,
             };
 
+            let attention_existed =
+                existed_as_of(&summary.repository.created_at, &calendar_yesterday);
             summary.attention_rank_trend = match (
-                existed,
+                attention_existed,
                 summary.human_attention.rank,
                 yesterday_attention_ranks.get(&name),
             ) {
@@ -1390,12 +1420,17 @@ mod tests {
             .await
             .expect("clones");
 
-        // "leader" is ahead as of yesterday and gets nothing new today, so it falls behind.
+        // "leader" is ahead as of yesterday and gets nothing new today (a real sync still
+        // writes a zero-count row for today either way), so it falls behind.
         insert_bare_repository(&store, "carlok/leader", &old).await;
         store
             .upsert_daily_traffic("carlok/leader", &yesterday.to_string(), "clone", 10, 0)
             .await
             .expect("clones");
+        store
+            .upsert_daily_traffic("carlok/leader", &today.to_string(), "clone", 0, 0)
+            .await
+            .expect("today placeholder");
 
         let summaries = store.repository_summaries("").await.expect("summaries");
         let climber = summaries
@@ -1411,6 +1446,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clone_rank_trend_is_correct_even_when_repositories_report_with_different_lag() {
+        // GitHub's traffic API reports "today" (UTC) inconsistently per repository — at any
+        // given moment some repositories already have a same-day row and most don't. A trend
+        // baseline anchored to a single fleet-wide cutoff date can't be "yesterday" for every
+        // repository at once, so it would tie against data already included in the "current"
+        // total for whichever repositories are lagging (masking real movement for most of the
+        // fleet). Anchoring per-repository instead must catch "riser"'s burst correctly even
+        // though it has no "today" row at all, unlike "reference".
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = Store::connect(&format!(
+            "sqlite:{}",
+            directory.path().join("traffic.db").display()
+        ))
+        .await
+        .expect("store");
+        let today = Utc::now().date_naive();
+        let yesterday = today - Duration::days(1);
+        let day_before_yesterday = today - Duration::days(2);
+        let old = (today - Duration::days(60)).to_string();
+
+        // "reference" reports through today (a same-day placeholder), unchanged throughout.
+        insert_bare_repository(&store, "carlok/reference", &old).await;
+        store
+            .upsert_daily_traffic(
+                "carlok/reference",
+                &day_before_yesterday.to_string(),
+                "clone",
+                20,
+                0,
+            )
+            .await
+            .expect("clones");
+        store
+            .upsert_daily_traffic("carlok/reference", &yesterday.to_string(), "clone", 0, 0)
+            .await
+            .expect("keep-alive");
+        store
+            .upsert_daily_traffic("carlok/reference", &today.to_string(), "clone", 0, 0)
+            .await
+            .expect("keep-alive");
+
+        // "riser" has NOT reported today at all (its own most recent data is dated yesterday),
+        // but got a real burst dated yesterday relative to its own prior history.
+        insert_bare_repository(&store, "carlok/riser", &old).await;
+        store
+            .upsert_daily_traffic(
+                "carlok/riser",
+                &day_before_yesterday.to_string(),
+                "clone",
+                5,
+                0,
+            )
+            .await
+            .expect("clones");
+        store
+            .upsert_daily_traffic("carlok/riser", &yesterday.to_string(), "clone", 100, 0)
+            .await
+            .expect("burst");
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        let riser = summaries
+            .iter()
+            .find(|summary| summary.repository.name == "carlok/riser")
+            .expect("riser");
+        let reference = summaries
+            .iter()
+            .find(|summary| summary.repository.name == "carlok/reference")
+            .expect("reference");
+        assert_eq!(riser.clone_rank_trend, RankTrend::Up);
+        assert_eq!(reference.clone_rank_trend, RankTrend::Down);
+    }
+
+    #[tokio::test]
     async fn clone_rank_trend_is_stable_when_order_is_unchanged() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let store = Store::connect(&format!(
@@ -1422,16 +1530,28 @@ mod tests {
         let today = Utc::now().date_naive();
         let old = (today - Duration::days(60)).to_string();
 
+        // Every sync writes a row for the full trailing window GitHub reports, including a
+        // likely-zero just-started "today" — so a real dormant repository still has a recent
+        // (if zero) row, not a 60-day-old gap. Reflect that here rather than only seeding the
+        // historical burst, or the trend baseline would have nothing recent to anchor against.
         insert_bare_repository(&store, "carlok/steady-a", &old).await;
         store
             .upsert_daily_traffic("carlok/steady-a", &old, "clone", 100, 0)
             .await
             .expect("clones");
+        store
+            .upsert_daily_traffic("carlok/steady-a", &today.to_string(), "clone", 0, 0)
+            .await
+            .expect("today placeholder");
         insert_bare_repository(&store, "carlok/steady-b", &old).await;
         store
             .upsert_daily_traffic("carlok/steady-b", &old, "clone", 50, 0)
             .await
             .expect("clones");
+        store
+            .upsert_daily_traffic("carlok/steady-b", &today.to_string(), "clone", 0, 0)
+            .await
+            .expect("today placeholder");
 
         let summaries = store.repository_summaries("").await.expect("summaries");
         assert!(
