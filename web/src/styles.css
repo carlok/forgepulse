@@ -152,10 +152,13 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
 .site-footer a:hover { color: var(--accent); }
 .site-footer .footer-links { display: flex; gap: 16px; }
 
-@media (max-width: 980px) {
+/* The 230px sidebar column is only worth its own full-height rail on genuinely wide
+   viewports — below this it's mostly empty space below a few links, so collapse it into a
+   slim first row of the main content instead. This is its own breakpoint, wider than the
+   980px one below: a plain laptop-width browser window (not just phone/tablet widths)
+   already has this problem. */
+@media (max-width: 1400px) {
   main { grid-template-columns: 1fr; }
-  /* Below the sidebar breakpoint it's really just the page's first row, not a separate
-     panel — drop the boxed background/border so it reads as part of the main content flow. */
   aside {
     min-height: auto;
     flex-direction: row;
@@ -171,6 +174,8 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
      row that reads as the page's first row rather than a separate boxed panel. */
   aside p { display: none; }
   .export-link { margin: 0 0 0 auto; }
+}
+@media (max-width: 980px) {
   .content { padding: 22px; }
   .grid { grid-template-columns: 1fr; }
   .kpis { grid-template-columns: repeat(2, 1fr); }
