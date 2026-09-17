@@ -156,8 +156,10 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
    viewports — below this it's mostly empty space below a few links, so collapse it into a
    slim first row of the main content instead. This is its own breakpoint, wider than the
    980px one below: a plain laptop-width browser window (not just phone/tablet widths)
-   already has this problem. */
-@media (max-width: 1400px) {
+   already has this problem — a 14" MacBook Pro's native 1512px width included, even
+   maximized, so the cutoff sits just above that rather than at a smaller "typical laptop"
+   guess. */
+@media (max-width: 1536px) {
   main { grid-template-columns: 1fr; }
   aside {
     min-height: auto;
