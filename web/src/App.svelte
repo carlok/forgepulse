@@ -215,6 +215,10 @@
     return kind.split('_').map((word) => word[0].toUpperCase() + word.slice(1)).join(' ');
   }
 
+  // No per-point dots: echarts 6 draws one on every day, which clutters a 100+ day series. The
+  // axis tooltip still marks the hovered point.
+  const LINE = { type: 'line', smooth: true, showSymbol: false } as const;
+
   function renderDashboardChart() {
     chart ??= echarts.init(chartElement, 'dark');
     const clonePoints = dashboard?.chart ?? [];
@@ -226,10 +230,10 @@
       grid: { left: 42, right: 18, top: 48, bottom: 30 },
       xAxis: { type: 'category', data: days }, yAxis: { type: 'value', minInterval: 1 },
       series: [
-        { name: 'Total clones', type: 'line', smooth: true, data: seriesValues(days, clonePoints, 'total_clones'), areaStyle: { opacity: 0.08 } },
-        { name: 'Unique cloners', type: 'line', smooth: true, data: seriesValues(days, clonePoints, 'unique_cloners') },
-        { name: 'Views', type: 'line', smooth: true, data: seriesValues(days, viewPoints, 'count') },
-        { name: 'Unique viewers', type: 'line', smooth: true, data: seriesValues(days, viewPoints, 'uniques') }
+        { ...LINE, name: 'Total clones', data: seriesValues(days, clonePoints, 'total_clones'), areaStyle: { opacity: 0.08 } },
+        { ...LINE, name: 'Unique cloners', data: seriesValues(days, clonePoints, 'unique_cloners') },
+        { ...LINE, name: 'Views', data: seriesValues(days, viewPoints, 'count') },
+        { ...LINE, name: 'Unique viewers', data: seriesValues(days, viewPoints, 'uniques') }
       ]
     }, true);
   }
@@ -244,10 +248,10 @@
       legend: { top: 0, data: ['Clones', 'Unique cloners', 'Views', 'Unique viewers'] },
       grid: { left: 42, right: 18, top: 48, bottom: 30 }, xAxis: { type: 'category', data: days }, yAxis: { type: 'value', minInterval: 1 },
       series: [
-        { name: 'Clones', type: 'line', smooth: true, data: seriesValues(days, clonePoints, 'count') },
-        { name: 'Unique cloners', type: 'line', smooth: true, data: seriesValues(days, clonePoints, 'uniques') },
-        { name: 'Views', type: 'line', smooth: true, data: seriesValues(days, viewPoints, 'count') },
-        { name: 'Unique viewers', type: 'line', smooth: true, data: seriesValues(days, viewPoints, 'uniques') }
+        { ...LINE, name: 'Clones', data: seriesValues(days, clonePoints, 'count') },
+        { ...LINE, name: 'Unique cloners', data: seriesValues(days, clonePoints, 'uniques') },
+        { ...LINE, name: 'Views', data: seriesValues(days, viewPoints, 'count') },
+        { ...LINE, name: 'Unique viewers', data: seriesValues(days, viewPoints, 'uniques') }
       ]
     }, true);
   }
