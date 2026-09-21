@@ -222,7 +222,7 @@
     const days = unionDays(clonePoints, viewPoints);
     chart.setOption({
       backgroundColor: 'transparent', color: CHART_COLORS, tooltip: { trigger: 'axis' },
-      legend: { data: ['Total clones', 'Unique cloners', 'Views', 'Unique viewers'] },
+      legend: { top: 0, data: ['Total clones', 'Unique cloners', 'Views', 'Unique viewers'] },
       grid: { left: 42, right: 18, top: 48, bottom: 30 },
       xAxis: { type: 'category', data: days }, yAxis: { type: 'value', minInterval: 1 },
       series: [
@@ -241,7 +241,7 @@
     const days = unionDays(clonePoints, viewPoints);
     detailChart.setOption({
       backgroundColor: 'transparent', color: CHART_COLORS, tooltip: { trigger: 'axis' },
-      legend: { data: ['Clones', 'Unique cloners', 'Views', 'Unique viewers'] },
+      legend: { top: 0, data: ['Clones', 'Unique cloners', 'Views', 'Unique viewers'] },
       grid: { left: 42, right: 18, top: 48, bottom: 30 }, xAxis: { type: 'category', data: days }, yAxis: { type: 'value', minInterval: 1 },
       series: [
         { name: 'Clones', type: 'line', smooth: true, data: seriesValues(days, clonePoints, 'count') },
