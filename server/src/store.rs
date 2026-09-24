@@ -240,23 +240,30 @@ impl Store {
         &self,
         search: &str,
     ) -> anyhow::Result<Vec<RepositorySummary>> {
+        // The 1d/7d/30d windows count back from the newest day GitHub has actually reported,
+        // not the wall clock — its traffic API lags a day or more, so a wall-clock window is
+        // mostly empty at its recent end. Each is capped at that day too, so a stray early
+        // same-day row for a few repositories can't leak in as a partial day.
+        let reference_day = self.traffic_reference_day().await?;
         let rows = sqlx::query_as::<_, SummaryRow>(
-            r#"SELECT r.name, r.description, r.stars, r.forks, r.watchers, r.issues, r.pull_requests,
+            r#"WITH anchor AS (SELECT ? AS day)
+               SELECT r.name, r.description, r.stars, r.forks, r.watchers, r.issues, r.pull_requests,
                  r.is_fork, r.is_archived, r.created_at, r.updated_at,
                  COALESCE(SUM(CASE WHEN d.metric='view' THEN d.count END), 0) AS total_views,
                  COALESCE(SUM(CASE WHEN d.metric='view' THEN d.uniques END), 0) AS total_view_uniques,
                  COALESCE(SUM(CASE WHEN d.metric='clone' THEN d.count END), 0) AS total_clones,
                  COALESCE(SUM(CASE WHEN d.metric='clone' THEN d.uniques END), 0) AS total_clone_uniques,
-                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day >= date('now', '-1 day') THEN d.count END), 0) AS clones_1d,
-                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day >= date('now', '-6 day') THEN d.count END), 0) AS clones_7d,
-                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day >= date('now', '-29 day') THEN d.count END), 0) AS clones_30d,
-                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day >= date('now', '-29 day') THEN d.uniques END), 0) AS unique_cloners_30d,
-                 COALESCE(SUM(CASE WHEN d.metric='view' AND d.day >= date('now', '-29 day') THEN d.count END), 0) AS views_30d,
-                 COALESCE(SUM(CASE WHEN d.metric='view' AND d.day >= date('now', '-6 day') THEN d.uniques END), 0) AS unique_views_7d
-               FROM repositories r LEFT JOIN daily_traffic d ON d.repository_name=r.name
+                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day = a.day THEN d.count END), 0) AS clones_1d,
+                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day BETWEEN date(a.day, '-6 day') AND a.day THEN d.count END), 0) AS clones_7d,
+                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day BETWEEN date(a.day, '-29 day') AND a.day THEN d.count END), 0) AS clones_30d,
+                 COALESCE(SUM(CASE WHEN d.metric='clone' AND d.day BETWEEN date(a.day, '-29 day') AND a.day THEN d.uniques END), 0) AS unique_cloners_30d,
+                 COALESCE(SUM(CASE WHEN d.metric='view' AND d.day BETWEEN date(a.day, '-29 day') AND a.day THEN d.count END), 0) AS views_30d,
+                 COALESCE(SUM(CASE WHEN d.metric='view' AND d.day BETWEEN date(a.day, '-6 day') AND a.day THEN d.uniques END), 0) AS unique_views_7d
+               FROM repositories r CROSS JOIN anchor a LEFT JOIN daily_traffic d ON d.repository_name=r.name
                WHERE lower(r.name) LIKE lower(?)
                GROUP BY r.name ORDER BY total_clones DESC, r.name ASC"#,
         )
+        .bind(&reference_day)
         .bind(format!("%{}%", search.trim()))
         .fetch_all(&self.pool)
         .await?;
@@ -320,7 +327,8 @@ impl Store {
             });
         }
         assign_human_attention_ranks(&mut summaries);
-        self.apply_rank_trends(&mut summaries, search).await?;
+        self.apply_rank_trends(&mut summaries, search, &reference_day)
+            .await?;
         Ok(summaries)
     }
 
@@ -683,6 +691,25 @@ impl Store {
         Ok(())
     }
 
+    /// The newest day that at least half of all repositories have a clone row for: what the
+    /// 1d/7d/30d windows count back from. GitHub's traffic API lags by a day or more, and only
+    /// a handful of repositories sometimes get an early same-day row while most don't, so a
+    /// plain fleet-wide `MAX(day)` would let a few early reporters move the anchor onto a day
+    /// almost nobody has data for and blank out everyone else's windows. Falls back to the
+    /// wall clock when there's no traffic data at all.
+    async fn traffic_reference_day(&self) -> anyhow::Result<String> {
+        let day: Option<String> = sqlx::query_scalar(
+            r#"SELECT day FROM daily_traffic WHERE metric='clone'
+               GROUP BY day
+               HAVING COUNT(DISTINCT repository_name) * 2 >=
+                 (SELECT COUNT(DISTINCT repository_name) FROM daily_traffic WHERE metric='clone')
+               ORDER BY day DESC LIMIT 1"#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(day.unwrap_or_else(|| Utc::now().date_naive().to_string()))
+    }
+
     /// Clone totals as of one day before each repository's OWN most recent clone data,
     /// alongside whether that repository already existed by then. GitHub's traffic API
     /// reports "today" (UTC) inconsistently — at any given moment some repositories already
@@ -721,10 +748,15 @@ impl Store {
             .collect())
     }
 
+    /// `views_as_of` is the last day of the 7-day views window; it's separate from `as_of`
+    /// (which drives the referrer/star/fork inputs) because views come from GitHub's lagging
+    /// traffic API and are anchored to its newest reported day, while the others are recorded
+    /// live each sync.
     async fn attention_scores_as_of(
         &self,
         search: &str,
         as_of: &str,
+        views_as_of: &str,
     ) -> anyhow::Result<BTreeMap<String, Option<f64>>> {
         let rows: Vec<(String, i64)> = sqlx::query_as(
             r#"SELECT r.name,
@@ -733,8 +765,8 @@ impl Store {
                WHERE lower(r.name) LIKE lower(?)
                GROUP BY r.name"#,
         )
-        .bind(as_of)
-        .bind(as_of)
+        .bind(views_as_of)
+        .bind(views_as_of)
         .bind(format!("%{}%", search.trim()))
         .fetch_all(&self.pool)
         .await?;
@@ -756,8 +788,13 @@ impl Store {
         &self,
         summaries: &mut [RepositorySummary],
         search: &str,
+        reference_day: &str,
     ) -> anyhow::Result<()> {
         let calendar_yesterday = (Utc::now().date_naive() - Duration::days(1)).to_string();
+        let views_baseline_day = (NaiveDate::parse_from_str(reference_day, "%Y-%m-%d")
+            .context("parse traffic reference day")?
+            - Duration::days(1))
+        .to_string();
         let clone_baseline = self.clone_totals_one_day_before_latest(search).await?;
         let yesterday_clone_ranks = dense_rank_by_total(
             clone_baseline
@@ -766,7 +803,7 @@ impl Store {
                 .collect(),
         );
         let yesterday_attention_ranks = dense_rank_by_score(
-            self.attention_scores_as_of(search, &calendar_yesterday)
+            self.attention_scores_as_of(search, &calendar_yesterday, &views_baseline_day)
                 .await?,
         );
 
@@ -1719,5 +1756,102 @@ mod tests {
             .expect("steady");
         assert_eq!(riser.attention_rank_trend, RankTrend::Up);
         assert_eq!(steady.attention_rank_trend, RankTrend::Down);
+    }
+
+    async fn store_in_tempdir() -> (tempfile::TempDir, Store) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = Store::connect(&format!(
+            "sqlite:{}",
+            directory.path().join("traffic.db").display()
+        ))
+        .await
+        .expect("store");
+        (directory, store)
+    }
+
+    async fn insert_clones(store: &Store, name: &str, days_ago: i64, count: i64) {
+        let day = (Utc::now().date_naive() - Duration::days(days_ago)).to_string();
+        store
+            .upsert_daily_traffic(name, &day, "clone", count, 0)
+            .await
+            .expect("clones");
+    }
+
+    fn summary_for<'a>(summaries: &'a [RepositorySummary], name: &str) -> &'a RepositorySummary {
+        summaries
+            .iter()
+            .find(|summary| summary.repository.name == name)
+            .expect("summary")
+    }
+
+    #[tokio::test]
+    async fn windows_count_back_from_the_latest_reported_day_not_the_wall_clock() {
+        let (_directory, store) = store_in_tempdir().await;
+        let old = (Utc::now().date_naive() - Duration::days(60)).to_string();
+        insert_bare_repository(&store, "carlok/lagging", &old).await;
+        // GitHub is two days behind: nothing dated yesterday or today yet.
+        insert_clones(&store, "carlok/lagging", 4, 5).await;
+        insert_clones(&store, "carlok/lagging", 3, 7).await;
+        insert_clones(&store, "carlok/lagging", 2, 20).await;
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        let lagging = summary_for(&summaries, "carlok/lagging");
+        // "1d" is the newest reported day alone (not that day plus the one before it), and
+        // it isn't empty just because the wall-clock day has no data yet.
+        assert_eq!(lagging.clones_1d, 20);
+        assert_eq!(lagging.clones_7d, 32);
+        assert_eq!(lagging.clones_30d, 32);
+    }
+
+    #[tokio::test]
+    async fn a_few_early_reporters_do_not_move_the_window_anchor() {
+        let (_directory, store) = store_in_tempdir().await;
+        let old = (Utc::now().date_naive() - Duration::days(60)).to_string();
+        for name in ["carlok/a", "carlok/b", "carlok/c", "carlok/early"] {
+            insert_bare_repository(&store, name, &old).await;
+            insert_clones(&store, name, 1, 10).await;
+        }
+        // Only one of four repositories already has a (partial) same-day row.
+        insert_clones(&store, "carlok/early", 0, 3).await;
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        // The anchor stays on yesterday, so everyone's "1d" is their yesterday, and the early
+        // reporter's partial today row is capped out of every window rather than leaking in.
+        for name in ["carlok/a", "carlok/b", "carlok/c", "carlok/early"] {
+            let repository = summary_for(&summaries, name);
+            assert_eq!(repository.clones_1d, 10, "{name} 1d");
+            assert_eq!(repository.clones_7d, 10, "{name} 7d");
+            assert_eq!(repository.clones_30d, 10, "{name} 30d");
+        }
+        // All-time totals still include it.
+        assert_eq!(summary_for(&summaries, "carlok/early").total_clones, 13);
+    }
+
+    #[tokio::test]
+    async fn the_anchor_moves_once_at_least_half_the_repositories_report_a_day() {
+        let (_directory, store) = store_in_tempdir().await;
+        let old = (Utc::now().date_naive() - Duration::days(60)).to_string();
+        for name in ["carlok/a", "carlok/b"] {
+            insert_bare_repository(&store, name, &old).await;
+            insert_clones(&store, name, 1, 10).await;
+            insert_clones(&store, name, 0, 4).await;
+        }
+        insert_bare_repository(&store, "carlok/slow", &old).await;
+        insert_clones(&store, "carlok/slow", 1, 10).await;
+
+        // Two of three repositories have today's row, so today is the anchor; the slow one has
+        // nothing for it yet and honestly shows zero for that day.
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        assert_eq!(summary_for(&summaries, "carlok/a").clones_1d, 4);
+        assert_eq!(summary_for(&summaries, "carlok/slow").clones_1d, 0);
+    }
+
+    #[tokio::test]
+    async fn the_anchor_falls_back_to_today_with_no_traffic_data() {
+        let (_directory, store) = store_in_tempdir().await;
+        assert_eq!(
+            store.traffic_reference_day().await.expect("anchor"),
+            Utc::now().date_naive().to_string()
+        );
     }
 }
