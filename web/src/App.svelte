@@ -199,6 +199,16 @@
     void refresh();
   }
 
+  // The homepage "Stars" figure is a fleet-wide total with no single repository behind it —
+  // clicking it jumps to the one place that lists every repository's own star count.
+  function showStarsRanking() {
+    ranking = 'clone_volume';
+    sortField = 'stars';
+    sortDir = 'desc';
+    page = 1;
+    void refresh();
+  }
+
   function attentionTitle(item: Dashboard['items'][number]): string {
     const c = item.human_attention.components;
     const value = (label: string, number: number | null) => `${label}: ${number === null ? 'N/A' : number}`;
@@ -290,7 +300,7 @@
           <article in:fly={{ y: 8, duration: 260, delay: 0 }}><span>Repositories</span><strong>{dashboard.total_count}</strong></article>
           <article in:fly={{ y: 8, duration: 260, delay: 40 }}><span>Total clones</span><strong>{dashboard.total_clones}</strong></article>
           <article in:fly={{ y: 8, duration: 260, delay: 80 }}><span>Total views</span><strong>{dashboard.total_views}</strong></article>
-          <article in:fly={{ y: 8, duration: 260, delay: 120 }}><span>Stars</span><strong>{dashboard.total_stars}</strong></article>
+          <button type="button" in:fly={{ y: 8, duration: 260, delay: 120 }} on:click={showStarsRanking} title="List every repository ranked by stars"><span>Stars</span><strong>{dashboard.total_stars}</strong></button>
         </div>
         <div class="grid">
           <section class="panel table-panel" in:fade={{ duration: 220 }}><div class="panel-title"><h2>Repository signal</h2><div class="ranking-toggle" aria-label="Ranking view"><button class:active={ranking === 'human_attention'} on:click={() => setRanking('human_attention')}>Human attention</button><button class:active={ranking === 'clone_volume'} on:click={() => setRanking('clone_volume')}>Clone volume</button></div></div><div class="scroll"><table><thead><tr><th class="rank-share">{ranking === 'human_attention' ? 'Attention' : 'Rank'}</th><th>Name</th>{#if ranking === 'clone_volume'}<th><button class="sort-header" class:active={sortField === 'stars'} on:click={() => toggleSort('stars')}>Stars{#if sortField === 'stars'}{#if sortDir === 'desc'}<ChevronDown size={12} />{:else}<ChevronUp size={12} />{/if}{/if}</button></th><th><button class="sort-header" class:active={sortField === 'total_views'} on:click={() => toggleSort('total_views')}>Views{#if sortField === 'total_views'}{#if sortDir === 'desc'}<ChevronDown size={12} />{:else}<ChevronUp size={12} />{/if}{/if}</button></th><th><button class="sort-header" class:active={sortField === 'total_clones'} on:click={() => toggleSort('total_clones')}>Clones{#if sortField === 'total_clones'}{#if sortDir === 'desc'}<ChevronDown size={12} />{:else}<ChevronUp size={12} />{/if}{/if}</button></th>{:else}<th>Stars</th><th>Views</th><th>Clones</th>{/if}<th>1d</th><th>7d</th><th>30d</th></tr></thead><tbody>{#each dashboard.items as item (item.name)}<tr animate:flip={{ duration: 220 }}><td class="rank-share">{#if ranking === 'human_attention'}<span title={attentionTitle(item)}>{item.human_attention.rank === null ? 'N/A' : ordinal(item.human_attention.rank)}</span><span class="rank-secondary" title={attentionTitle(item)}>{item.human_attention.score === null ? 'N/A' : item.human_attention.score.toFixed(2)}</span><span class="rank-trend" style={`color: ${trendPresentation(item.attention_rank_trend).color}`} title={trendPresentation(item.attention_rank_trend).label}><svelte:component this={trendPresentation(item.attention_rank_trend).icon} size={12} /></span>{:else}<span>{ordinal(item.clone_rank)}</span><span class="rank-secondary">{formatPercent(item.clone_share_percent)}</span><span class="rank-trend" style={`color: ${trendPresentation(item.clone_rank_trend).color}`} title={trendPresentation(item.clone_rank_trend).label}><svelte:component this={trendPresentation(item.clone_rank_trend).icon} size={12} /></span>{/if}</td><td><a class="repository-link" href={`/repositories/${item.name}`} on:click={(event) => navigate(event, () => openRepository(item.name))}>{item.name}</a><small>{item.description}</small>{#if item.diagnoses.length}<div class="diagnoses">{#each item.diagnoses as diagnosis}<div class="diagnosis-detail"><span class="diagnosis">{diagnosisLabel(diagnosis.kind)}</span><small>{diagnosis.evidence.join(' · ')}</small></div>{/each}</div>{/if}</td><td><a class="repository-link" href={`https://github.com/${item.name}/stargazers`} target="_blank" rel="noreferrer">{item.stars}</a></td><td>{item.total_views}</td><td class:above-median={medianClones !== null && item.clone_daily_median !== null && item.clone_daily_median > medianClones}>{item.total_clones}</td><td>{item.clones_1d}</td><td>{item.clones_7d}</td><td>{item.clones_30d}</td></tr>{/each}</tbody></table></div>{#if totalPages > 1}<div class="pager"><span>Page {page} of {totalPages}</span><div class="pager-controls"><button class="button" disabled={page <= 1} on:click={() => goToPage(page - 1)}><ChevronLeft size={14} />Prev</button><button class="button" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}>Next<ChevronRight size={14} /></button></div></div>{/if}</section>

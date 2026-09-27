@@ -87,14 +87,16 @@ h2 { font-family: var(--font-display); font-size: .95rem; letter-spacing: -.02em
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
-.kpis article, .panel {
+.kpis article, .kpis button, .panel {
   background: var(--color-surface);
   border: var(--border-width-card) solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
   transition: background-color var(--transition-base), border-color var(--transition-base);
 }
-.kpis article { padding: calc(15px * var(--space-unit)); display: grid; gap: 6px; }
+.kpis article, .kpis button { padding: calc(15px * var(--space-unit)); display: grid; gap: 6px; }
+.kpis button { text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.kpis button:hover, .kpis button:focus-visible { border-color: var(--accent); }
 .kpis span, .panel-title span, .statistics span, small { color: var(--text-muted); font-size: .72rem; }
 .kpis strong { font-family: var(--font-display); font-size: 1.5rem; letter-spacing: -.04em; }
 
