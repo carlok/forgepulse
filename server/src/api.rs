@@ -19,7 +19,9 @@ use tower_http::{
 
 use crate::{
     github::GitHubCollector,
-    models::{DashboardResponse, JsonlExportRow, RepositoryDetail, RepositorySummary, SyncRun},
+    models::{
+        DashboardResponse, JsonlExportRow, RepositoryDetail, RepositorySummary, StarEvent, SyncRun,
+    },
     stats,
     store::{Store, statistics_for_chart},
 };
@@ -52,6 +54,7 @@ pub fn router(state: AppState, web_dir: Option<String>) -> Router {
         .route("/api/v1/export.jsonl", get(export_jsonl))
         .route("/api/v1/sync", post(sync_now))
         .route("/api/v1/sync-runs", get(sync_runs))
+        .route("/api/v1/star-events", get(star_events))
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
@@ -211,6 +214,10 @@ async fn sync_now(State(state): State<AppState>) -> Result<Json<serde_json::Valu
 
 async fn sync_runs(State(state): State<AppState>) -> Result<Json<Vec<SyncRun>>, ApiError> {
     Ok(Json(state.store.sync_runs().await?))
+}
+
+async fn star_events(State(state): State<AppState>) -> Result<Json<Vec<StarEvent>>, ApiError> {
+    Ok(Json(state.store.recent_star_events(200).await?))
 }
 
 fn sort_repositories(

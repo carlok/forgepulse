@@ -10,7 +10,7 @@ use sqlx::{
 use crate::{
     models::{
         CloneChartPoint, DayPoint, Diagnosis, HumanAttention, HumanAttentionComponents, PathPoint,
-        RankTrend, ReferrerPoint, Repository, RepositorySummary, StarPoint, SyncRun,
+        RankTrend, ReferrerPoint, Repository, RepositorySummary, StarEvent, StarPoint, SyncRun,
     },
     stats,
 };
@@ -154,6 +154,42 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn upsert_star_event(
+        &self,
+        repository_name: &str,
+        login: &str,
+        avatar_url: &str,
+        html_url: &str,
+        starred_at: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"INSERT INTO star_events (repository_name, login, avatar_url, html_url, starred_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(repository_name, login) DO UPDATE SET
+                 avatar_url=excluded.avatar_url, html_url=excluded.html_url, starred_at=excluded.starred_at"#,
+        )
+        .bind(repository_name)
+        .bind(login)
+        .bind(avatar_url)
+        .bind(html_url)
+        .bind(starred_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Every recorded star, newest first, across every tracked repository — a fleet-wide feed
+    /// rather than one repository's own list, which is what makes this worth having: GitHub has
+    /// no single page for "everyone who starred any of my repositories, mixed together".
+    pub async fn recent_star_events(&self, limit: i64) -> anyhow::Result<Vec<StarEvent>> {
+        Ok(sqlx::query_as(
+            "SELECT repository_name, login, avatar_url, html_url, starred_at FROM star_events ORDER BY starred_at DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     pub async fn upsert_fork(
@@ -1853,5 +1889,71 @@ mod tests {
             store.traffic_reference_day().await.expect("anchor"),
             Utc::now().date_naive().to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn recent_star_events_are_newest_first_across_repositories() {
+        let (_directory, store) = store_in_tempdir().await;
+        let old = (Utc::now().date_naive() - Duration::days(60)).to_string();
+        insert_bare_repository(&store, "carlok/a", &old).await;
+        insert_bare_repository(&store, "carlok/b", &old).await;
+        store
+            .upsert_star_event(
+                "carlok/a",
+                "early-bird",
+                "a.png",
+                "https://github.com/early-bird",
+                "2026-08-01T00:00:00Z",
+            )
+            .await
+            .expect("star event");
+        store
+            .upsert_star_event(
+                "carlok/b",
+                "latest-fan",
+                "b.png",
+                "https://github.com/latest-fan",
+                "2026-09-01T00:00:00Z",
+            )
+            .await
+            .expect("star event");
+
+        let events = store.recent_star_events(10).await.expect("star events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].login, "latest-fan");
+        assert_eq!(events[0].repository_name, "carlok/b");
+        assert_eq!(events[1].login, "early-bird");
+    }
+
+    #[tokio::test]
+    async fn upserting_a_star_event_again_updates_it_in_place_rather_than_duplicating() {
+        let (_directory, store) = store_in_tempdir().await;
+        let old = (Utc::now().date_naive() - Duration::days(60)).to_string();
+        insert_bare_repository(&store, "carlok/a", &old).await;
+        store
+            .upsert_star_event(
+                "carlok/a",
+                "someone",
+                "old.png",
+                "https://github.com/someone",
+                "2026-08-01T00:00:00Z",
+            )
+            .await
+            .expect("first star event");
+        store
+            .upsert_star_event(
+                "carlok/a",
+                "someone",
+                "new.png",
+                "https://github.com/someone",
+                "2026-08-02T00:00:00Z",
+            )
+            .await
+            .expect("re-synced star event");
+
+        let events = store.recent_star_events(10).await.expect("star events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].avatar_url, "new.png");
+        assert_eq!(events[0].starred_at, "2026-08-02T00:00:00Z");
     }
 }

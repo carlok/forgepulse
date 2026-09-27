@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { exportUrl, loadDashboard, loadHealth, loadRepository, loadSyncRuns, triggerSync } from './api';
+import { exportUrl, loadDashboard, loadHealth, loadRepository, loadStarEvents, loadSyncRuns, triggerSync } from './api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -72,5 +72,18 @@ describe('dashboard API client', () => {
   it('falls back to a generic message when a failed sync has no error body', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => { throw new Error('no body'); } }));
     await expect(triggerSync()).rejects.toThrow('503');
+  });
+
+  it('loads star events', async () => {
+    const events = [{ repository_name: 'carlok/forgepulse', login: 'octocat', avatar_url: 'https://example.com/o.png', html_url: 'https://github.com/octocat', starred_at: '2026-09-01T00:00:00Z' }];
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => events });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(loadStarEvents()).resolves.toEqual(events);
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/star-events');
+  });
+
+  it('reports an HTTP error for star events', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+    await expect(loadStarEvents()).rejects.toThrow('500');
   });
 });

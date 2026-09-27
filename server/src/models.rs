@@ -45,6 +45,15 @@ pub struct StarPoint {
     pub total: i64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct StarEvent {
+    pub repository_name: String,
+    pub login: String,
+    pub avatar_url: String,
+    pub html_url: String,
+    pub starred_at: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HumanAttentionComponents {
     pub unique_views_7d: Option<i64>,

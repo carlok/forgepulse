@@ -105,6 +105,20 @@ export async function loadSyncRuns(): Promise<SyncRun[]> {
   return response.json() as Promise<SyncRun[]>;
 }
 
+export interface StarEvent {
+  repository_name: string;
+  login: string;
+  avatar_url: string;
+  html_url: string;
+  starred_at: string;
+}
+
+export async function loadStarEvents(): Promise<StarEvent[]> {
+  const response = await fetch('/api/v1/star-events');
+  if (!response.ok) throw new Error(`Star events request failed: ${response.status}`);
+  return response.json() as Promise<StarEvent[]>;
+}
+
 export interface SyncResult {
   status: string;
   repositories_synced: number;

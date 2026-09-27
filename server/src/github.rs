@@ -51,6 +51,21 @@ struct GitHubRepository {
     created_at: String,
 }
 
+/// Only present when requested with the `application/vnd.github.star+json` media type — the
+/// plain JSON media type returns bare user objects with no `starred_at`.
+#[derive(Debug, Deserialize)]
+struct StarGazer {
+    starred_at: String,
+    user: StarGazerUser,
+}
+
+#[derive(Debug, Deserialize)]
+struct StarGazerUser {
+    login: String,
+    avatar_url: String,
+    html_url: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct TrafficResponse {
     #[serde(default)]
@@ -309,6 +324,17 @@ impl GitHubCollector {
         store
             .upsert_star(&source.full_name, &today, source.stargazers_count)
             .await?;
+        for stargazer in self.stargazers(&source.full_name).await.unwrap_or_default() {
+            store
+                .upsert_star_event(
+                    &source.full_name,
+                    &stargazer.user.login,
+                    &stargazer.user.avatar_url,
+                    &stargazer.user.html_url,
+                    &stargazer.starred_at,
+                )
+                .await?;
+        }
         store
             .upsert_fork(&source.full_name, &today, source.forks_count)
             .await?;
@@ -400,14 +426,45 @@ impl GitHubCollector {
         Ok(estimate)
     }
 
+    /// Every current stargazer with the moment they starred, oldest page first. GitHub keeps
+    /// the true original `starred_at` for as long as the star stands, so this is accurate from
+    /// the very first sync — unlike the human-attention baselines, it needs no backfill period.
+    /// Bounded to 1,000 stargazers (10 pages); every tracked repository has under a dozen today.
+    async fn stargazers(&self, repository: &str) -> anyhow::Result<Vec<StarGazer>> {
+        let mut all = Vec::new();
+        for page in 1..=10 {
+            let batch: Vec<StarGazer> = self
+                .get_with_accept(
+                    &format!("/repos/{repository}/stargazers?per_page=100&page={page}"),
+                    "application/vnd.github.star+json",
+                )
+                .await?;
+            let full_page = batch.len() == 100;
+            all.extend(batch);
+            if !full_page {
+                break;
+            }
+        }
+        Ok(all)
+    }
+
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> anyhow::Result<T> {
+        self.get_with_accept(path, "application/vnd.github+json")
+            .await
+    }
+
+    async fn get_with_accept<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        accept: &str,
+    ) -> anyhow::Result<T> {
         let url = format!("{}{path}", self.base_url);
         for attempt in 0..3 {
             let response = self
                 .client
                 .get(&url)
                 .bearer_auth(&self.token)
-                .header("Accept", "application/vnd.github+json")
+                .header("Accept", accept)
                 .header("X-GitHub-Api-Version", "2022-11-28")
                 .send()
                 .await?;
@@ -484,6 +541,12 @@ mod tests {
             ]),
             "/repos/carlok/alpha/traffic/popular/paths" => serde_json::json!([
                 { "path": "/README.md", "title": "Read me", "count": 6, "uniques": 4 }
+            ]),
+            "/repos/carlok/alpha/stargazers" => serde_json::json!([
+                {
+                    "starred_at": "2026-08-19T10:00:00Z",
+                    "user": { "login": "octocat", "avatar_url": "https://example.com/o.png", "html_url": "https://github.com/octocat" }
+                }
             ]),
             _ => return HttpStatusCode::NOT_FOUND.into_response(),
         };
@@ -570,6 +633,27 @@ mod tests {
             store.sync_runs().await.expect("runs")[0].status,
             "succeeded"
         );
+        let events = store.recent_star_events(10).await.expect("star events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].login, "octocat");
+        assert_eq!(events[0].starred_at, "2026-08-19T10:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn stargazers_parses_the_star_json_media_type_shape() {
+        let collector = GitHubCollector::with_base_url(
+            "token".into(),
+            "carlok/*".into(),
+            &mock_server_url().await,
+        )
+        .expect("collector");
+        let stargazers = collector
+            .stargazers("carlok/alpha")
+            .await
+            .expect("stargazers");
+        assert_eq!(stargazers.len(), 1);
+        assert_eq!(stargazers[0].user.login, "octocat");
+        assert_eq!(stargazers[0].starred_at, "2026-08-19T10:00:00Z");
     }
 
     #[tokio::test]
