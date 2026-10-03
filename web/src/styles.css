@@ -229,3 +229,4 @@ td:first-child { font-variant-numeric: tabular-nums; font-family: var(--font-mon
   .detail-grid { grid-template-columns: 1fr; }
   .project-link { margin: 0; }
 }
+.rank-share .top-both { display: inline-flex; vertical-align: middle; margin-left: 4px; color: var(--accent, #d4a017); }
