@@ -21,6 +21,7 @@ async fn main() -> anyhow::Result<()> {
     if env::var("FORGEPULSE_DEMO").as_deref() == Ok("true") {
         store.seed_demo().await?;
     }
+    store.fail_interrupted_sync_runs().await?;
     let collector = env::var("FORGEPULSE_GITHUB_TOKEN")
         .ok()
         .filter(|token| !token.is_empty())

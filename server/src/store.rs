@@ -266,6 +266,14 @@ impl Store {
         Ok(())
     }
 
+    pub async fn fail_interrupted_sync_runs(&self) -> anyhow::Result<u64> {
+        let result = sqlx::query("UPDATE sync_runs SET finished_at=?, status='failed', message='interrupted by restart' WHERE status='running'")
+            .bind(Utc::now().to_rfc3339())
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn sync_runs(&self) -> anyhow::Result<Vec<SyncRun>> {
         Ok(sqlx::query_as("SELECT id, started_at, finished_at, status, repositories_synced, message FROM sync_runs ORDER BY id DESC LIMIT 20")
             .fetch_all(&self.pool)
@@ -1955,5 +1963,28 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].avatar_url, "new.png");
         assert_eq!(events[0].starred_at, "2026-08-02T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn restart_fails_sync_runs_left_running_and_leaves_finished_ones() {
+        let (_dir, store) = store_in_tempdir().await;
+        let stale = store.start_sync_run().await.unwrap();
+        let done = store.start_sync_run().await.unwrap();
+        store
+            .finish_sync_run(done, "succeeded", 5, None)
+            .await
+            .unwrap();
+
+        assert_eq!(store.fail_interrupted_sync_runs().await.unwrap(), 1);
+
+        let runs = store.sync_runs().await.unwrap();
+        let stale_run = runs.iter().find(|run| run.id == stale).unwrap();
+        assert_eq!(stale_run.status, "failed");
+        assert_eq!(stale_run.message.as_deref(), Some("interrupted by restart"));
+        assert!(stale_run.finished_at.is_some());
+        let done_run = runs.iter().find(|run| run.id == done).unwrap();
+        assert_eq!(done_run.status, "succeeded");
+        assert_eq!(done_run.repositories_synced, 5);
+        assert_eq!(store.fail_interrupted_sync_runs().await.unwrap(), 0);
     }
 }
