@@ -45,6 +45,8 @@ cd forgepulse
 podman compose -f compose.prod.yml up --build -d
 ```
 
+On a Mac with a Podman machine, `scripts/deploy.sh` does the same thing in one step: it starts the machine if needed, builds the image, stamps the running version (`branch@sha`) into `/api/health`, recreates the container and waits for it to be healthy.
+
 The server embeds no development source mount. Its static frontend is copied into the production image and is served by the API process. The service is loopback-only by default. Put it behind an HTTPS reverse proxy only if remote access is intentionally required.
 
 ## API surface
