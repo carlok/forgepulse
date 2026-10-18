@@ -406,7 +406,7 @@ mod tests {
         assert_eq!(json["total_count"], 1);
         assert_eq!(json["items"][0]["clone_rank"], 1);
         assert_eq!(json["ranking"], "human_attention");
-        assert_eq!(json["items"][0]["human_attention"]["version"], "v1");
+        assert_eq!(json["items"][0]["human_attention"]["version"], "v2");
         assert_eq!(json["chart"][0]["total_clones"], 5);
         assert_eq!(json["chart"][0]["unique_cloners"], 2);
         assert_eq!(json["views_chart"][0]["count"], 15);
@@ -478,7 +478,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         let record: serde_json::Value = serde_json::from_str(lines[0]).expect("jsonl record");
         assert_eq!(record["repository"]["name"], "carlok/alpha");
-        assert_eq!(record["repository"]["human_attention"]["version"], "v1");
+        assert_eq!(record["repository"]["human_attention"]["version"], "v2");
     }
 
     #[tokio::test]

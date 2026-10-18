@@ -576,7 +576,7 @@ impl Store {
             new_forks_30d,
         );
         Ok(HumanAttention {
-            version: "v1".into(),
+            version: "v2".into(),
             score,
             rank: None,
             components,
@@ -599,13 +599,19 @@ impl Store {
         .bind(as_of)
         .fetch_one(&self.pool)
         .await?;
+        // GitHub's referrer endpoint is a rolling 14-day window and an empty list stores no rows,
+        // so only a snapshot from the last day is current; anything older (or none) means zero.
+        let freshest_allowed = (NaiveDate::parse_from_str(as_of, "%Y-%m-%d")
+            .context("parse as_of date")?
+            - Duration::days(1))
+        .to_string();
         let external_referrer_uniques_14d = match latest_referrer_snapshot {
-            Some(captured_on) => Some(sqlx::query_scalar(
+            Some(captured_on) if captured_on >= freshest_allowed => Some(sqlx::query_scalar(
                 r#"SELECT COALESCE(SUM(uniques), 0) FROM referrer_snapshots
                    WHERE repository_name=? AND captured_on=?
                      AND lower(referrer) != 'github.com' AND lower(referrer) NOT LIKE '%.github.com'"#,
             ).bind(repository_name).bind(captured_on).fetch_one(&self.pool).await?),
-            None => None,
+            _ => Some(0),
         };
         let stars = self
             .history_delta_as_of("star_history", repository_name, as_of)
@@ -625,14 +631,44 @@ impl Store {
         let cutoff = (NaiveDate::parse_from_str(as_of, "%Y-%m-%d").context("parse as_of date")?
             - Duration::days(30))
         .to_string();
-        let query = format!("SELECT total FROM {table} WHERE repository_name=? AND day=?");
-        let Some(baseline) = sqlx::query_scalar::<_, i64>(&query)
+        let query = format!(
+            "SELECT total FROM {table} WHERE repository_name=? AND day<=? ORDER BY day DESC LIMIT 1"
+        );
+        let before_window = sqlx::query_scalar::<_, i64>(&query)
             .bind(repository_name)
             .bind(&cutoff)
             .fetch_optional(&self.pool)
-            .await?
-        else {
-            return Ok(None);
+            .await?;
+        let baseline = match before_window {
+            Some(total) => total,
+            None => {
+                let created_at: Option<String> =
+                    sqlx::query_scalar("SELECT created_at FROM repositories WHERE name=?")
+                        .bind(repository_name)
+                        .fetch_optional(&self.pool)
+                        .await?;
+                let created_inside_window = created_at
+                    .and_then(|day| NaiveDate::parse_from_str(&day, "%Y-%m-%d").ok())
+                    .is_some_and(|day| day.to_string() >= cutoff);
+                if created_inside_window {
+                    0
+                } else {
+                    // Tracking started inside the window: the first observation is the only
+                    // baseline we have, which undercounts rather than inventing history.
+                    let query = format!(
+                        "SELECT total FROM {table} WHERE repository_name=? AND day<=? ORDER BY day ASC LIMIT 1"
+                    );
+                    let Some(first) = sqlx::query_scalar::<_, i64>(&query)
+                        .bind(repository_name)
+                        .bind(as_of)
+                        .fetch_optional(&self.pool)
+                        .await?
+                    else {
+                        return Ok(None);
+                    };
+                    first
+                }
+            }
         };
         // Bounded by `as_of`, not just "the latest row ever" — required once `as_of` can be
         // "yesterday", or a row inserted for today would leak into yesterday's delta.
@@ -846,10 +882,10 @@ impl Store {
                 .map(|(name, &(total, _))| (name.clone(), total))
                 .collect(),
         );
-        let yesterday_attention_ranks = dense_rank_by_score(
-            self.attention_scores_as_of(search, &calendar_yesterday, &views_baseline_day)
-                .await?,
-        );
+        let yesterday_attention_scores = self
+            .attention_scores_as_of(search, &calendar_yesterday, &views_baseline_day)
+            .await?;
+        let yesterday_attention_ranks = dense_rank_by_score(yesterday_attention_scores.clone());
 
         for summary in summaries.iter_mut() {
             let name = summary.repository.name.clone();
@@ -864,15 +900,15 @@ impl Store {
 
             let attention_existed =
                 existed_as_of(&summary.repository.created_at, &calendar_yesterday);
-            summary.attention_rank_trend = match (
-                attention_existed,
-                summary.human_attention.rank,
-                yesterday_attention_ranks.get(&name),
-            ) {
-                (true, Some(today_rank), Some(&yesterday_rank)) => {
-                    compare_rank(today_rank, yesterday_rank)
-                }
-                _ => RankTrend::Unknown,
+            summary.attention_rank_trend = if attention_existed {
+                attention_trend(
+                    summary.human_attention.rank,
+                    summary.human_attention.score,
+                    yesterday_attention_ranks.get(&name).copied(),
+                    yesterday_attention_scores.get(&name).copied().flatten(),
+                )
+            } else {
+                RankTrend::Unknown
             };
         }
         Ok(())
@@ -955,8 +991,8 @@ fn assign_human_attention_ranks(summaries: &mut [RepositorySummary]) {
     }
 }
 
-/// Same ln_1p-weighted formula `human_attention` has always used — extracted so it isn't
-/// duplicated between "as of today" and "as of yesterday" (`attention_scores_as_of`).
+/// The v2 formula: ln_1p-damped, with a fork weighted the same as a star. Shared between "as of
+/// today" and "as of yesterday" (`attention_scores_as_of`).
 fn attention_score(
     unique_views_7d: i64,
     external_referrer_uniques_14d: Option<i64>,
@@ -968,7 +1004,7 @@ fn attention_score(
             (unique_views_7d as f64).ln_1p()
                 + 2.0 * (referrers as f64).ln_1p()
                 + 4.0 * (stars as f64).ln_1p()
-                + 6.0 * (forks as f64).ln_1p(),
+                + 4.0 * (forks as f64).ln_1p(),
         ),
         _ => None,
     }
@@ -999,11 +1035,16 @@ fn dense_rank_by_total(totals: BTreeMap<String, i64>) -> BTreeMap<String, usize>
 }
 
 /// Same dense-rank shape as [`dense_rank_by_total`], but descending by an optional score —
-/// repositories with no score (`None`) are left unranked rather than sorted to one end.
+/// repositories with no score (`None`) or a zero score (no signal at all) are left unranked
+/// rather than tied at the bottom.
 fn dense_rank_by_score(scores: BTreeMap<String, Option<f64>>) -> BTreeMap<String, usize> {
     let mut ordered = scores
         .into_iter()
-        .filter_map(|(name, score)| score.map(|score| (name, score)))
+        .filter_map(|(name, score)| {
+            score
+                .filter(|score| *score > 0.0)
+                .map(|score| (name, score))
+        })
         .collect::<Vec<_>>();
     ordered.sort_by(|(left_name, left_score), (right_name, right_score)| {
         right_score
@@ -1031,6 +1072,24 @@ fn existed_as_of(created_at: &str, as_of: &str) -> bool {
     NaiveDate::parse_from_str(created_at, "%Y-%m-%d")
         .ok()
         .is_none_or(|day| day.to_string().as_str() <= as_of)
+}
+
+/// Like [`compare_rank`], but a zero score (unranked, yet known) counts as "off the chart":
+/// entering from zero is `Up`, dropping to zero is `Down`, zero on both days is `Stable`.
+fn attention_trend(
+    today_rank: Option<usize>,
+    today_score: Option<f64>,
+    yesterday_rank: Option<usize>,
+    yesterday_score: Option<f64>,
+) -> RankTrend {
+    let zero = |score: Option<f64>| score == Some(0.0);
+    match (today_rank, yesterday_rank) {
+        (Some(today), Some(yesterday)) => compare_rank(today, yesterday),
+        (Some(_), None) if zero(yesterday_score) => RankTrend::Up,
+        (None, Some(_)) if zero(today_score) => RankTrend::Down,
+        (None, None) if zero(today_score) && zero(yesterday_score) => RankTrend::Stable,
+        _ => RankTrend::Unknown,
+    }
 }
 
 fn compare_rank(today: usize, yesterday: usize) -> RankTrend {
@@ -1131,7 +1190,7 @@ mod tests {
             .expect("actions");
         let mut summaries = store.repository_summaries(name).await.expect("summary");
         let summary = summaries.remove(0);
-        assert_eq!(summary.human_attention.version, "v1");
+        assert_eq!(summary.human_attention.version, "v2");
         assert_eq!(summary.human_attention.components.new_stars_30d, Some(13));
         assert_eq!(summary.human_attention.components.new_forks_30d, Some(2));
         assert!(summary.human_attention.score.is_some());
@@ -1664,45 +1723,140 @@ mod tests {
         assert_eq!(summary.clone_rank_trend, RankTrend::Unknown);
     }
 
-    #[tokio::test]
-    async fn attention_rank_trend_is_unknown_when_yesterdays_baseline_row_is_missing() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let store = Store::connect(&format!(
-            "sqlite:{}",
-            directory.path().join("traffic.db").display()
-        ))
-        .await
-        .expect("store");
-        let today = Utc::now().date_naive();
-        let old = (today - Duration::days(60)).to_string();
-        let name = "carlok/fresh-history";
+    fn days_ago(days: i64) -> String {
+        (Utc::now().date_naive() - Duration::days(days)).to_string()
+    }
 
-        insert_bare_repository(&store, name, &old).await;
+    async fn star_and_fork_rows(store: &Store, name: &str, rows: &[(i64, i64)]) {
+        for &(days, total) in rows {
+            store
+                .upsert_star(name, &days_ago(days), total)
+                .await
+                .expect("star row");
+            store
+                .upsert_fork(name, &days_ago(days), total)
+                .await
+                .expect("fork row");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_exact_baseline_day_falls_back_to_the_latest_earlier_row() {
+        let (_dir, store) = store_in_tempdir().await;
+        let name = "carlok/gappy";
+        insert_bare_repository(&store, name, &days_ago(400)).await;
+        // No row exactly 30 (or 31) days ago: the sync missed those days.
+        star_and_fork_rows(&store, name, &[(45, 2), (0, 5)]).await;
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        let summary = summary_for(&summaries, name);
+        assert_eq!(summary.human_attention.components.new_stars_30d, Some(3));
+        assert_eq!(summary.human_attention.components.new_forks_30d, Some(3));
+        assert!(summary.human_attention.score.is_some());
+        assert_ne!(summary.attention_rank_trend, RankTrend::Unknown);
+    }
+
+    #[tokio::test]
+    async fn an_old_repository_first_tracked_inside_the_window_uses_its_first_observation() {
+        let (_dir, store) = store_in_tempdir().await;
+        let name = "carlok/newly-tracked";
+        insert_bare_repository(&store, name, &days_ago(400)).await;
+        star_and_fork_rows(&store, name, &[(5, 10), (0, 12)]).await;
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        let components = &summary_for(&summaries, name).human_attention.components;
+        assert_eq!(components.new_stars_30d, Some(2));
+        assert_eq!(components.new_forks_30d, Some(2));
+    }
+
+    #[tokio::test]
+    async fn a_repository_created_inside_the_window_counts_all_its_stars_as_new() {
+        let (_dir, store) = store_in_tempdir().await;
+        let name = "carlok/just-launched";
+        insert_bare_repository(&store, name, &days_ago(10)).await;
+        star_and_fork_rows(&store, name, &[(3, 1), (0, 2)]).await;
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        let summary = summary_for(&summaries, name);
+        assert_eq!(summary.human_attention.components.new_stars_30d, Some(2));
+        assert_eq!(summary.human_attention.components.new_forks_30d, Some(2));
+        assert_eq!(summary.human_attention.rank, Some(1));
+    }
+
+    #[tokio::test]
+    async fn referrers_count_only_from_a_fresh_snapshot_and_none_means_zero() {
+        let (_dir, store) = store_in_tempdir().await;
+        for name in ["carlok/no-referrers", "carlok/stale", "carlok/fresh"] {
+            insert_bare_repository(&store, name, &days_ago(400)).await;
+            star_and_fork_rows(&store, name, &[(60, 0), (0, 0)]).await;
+        }
         store
-            .upsert_referrer(
-                name,
-                &(today - Duration::days(1)).to_string(),
-                "example.com",
-                5,
-                3,
-            )
+            .upsert_referrer("carlok/stale", &days_ago(3), "linkedin.com", 4, 3)
+            .await
+            .expect("stale referrer");
+        store
+            .upsert_referrer("carlok/fresh", &days_ago(1), "linkedin.com", 4, 3)
+            .await
+            .expect("fresh referrer");
+
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        let referrers = |name| {
+            summary_for(&summaries, name)
+                .human_attention
+                .components
+                .external_referrer_uniques_14d
+        };
+        assert_eq!(referrers("carlok/no-referrers"), Some(0));
+        assert_eq!(referrers("carlok/stale"), Some(0));
+        assert_eq!(referrers("carlok/fresh"), Some(3));
+        assert!(
+            summary_for(&summaries, "carlok/no-referrers")
+                .human_attention
+                .score
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_zero_score_is_unranked_and_entering_or_leaving_zero_moves_the_trend() {
+        let (_dir, store) = store_in_tempdir().await;
+        for name in ["carlok/quiet", "carlok/newcomer", "carlok/fading"] {
+            insert_bare_repository(&store, name, &days_ago(60)).await;
+            star_and_fork_rows(&store, name, &[(60, 0)]).await;
+        }
+        // newcomer: its first fork lands today, so it scored 0 yesterday.
+        store
+            .upsert_fork("carlok/newcomer", &days_ago(0), 1)
+            .await
+            .expect("fork today");
+        // fading: a referrer snapshot two days old is fresh as of yesterday, stale as of today.
+        store
+            .upsert_referrer("carlok/fading", &days_ago(2), "linkedin.com", 4, 3)
             .await
             .expect("referrer");
-        // Only a baseline exactly 30 days before *today* exists — 30 days before *yesterday*
-        // (one day earlier) has no row, so the "as of yesterday" score can't be computed.
-        store
-            .upsert_star(name, &(today - Duration::days(30)).to_string(), 1)
-            .await
-            .expect("star baseline");
-        store
-            .upsert_fork(name, &(today - Duration::days(30)).to_string(), 1)
-            .await
-            .expect("fork baseline");
 
-        let mut summaries = store.repository_summaries("").await.expect("summaries");
-        let summary = summaries.remove(0);
-        assert!(summary.human_attention.score.is_some());
-        assert_eq!(summary.attention_rank_trend, RankTrend::Unknown);
+        let summaries = store.repository_summaries("").await.expect("summaries");
+        let quiet = summary_for(&summaries, "carlok/quiet");
+        assert_eq!(quiet.human_attention.score, Some(0.0));
+        assert_eq!(quiet.human_attention.rank, None);
+        assert_eq!(quiet.attention_rank_trend, RankTrend::Stable);
+
+        let newcomer = summary_for(&summaries, "carlok/newcomer");
+        assert_eq!(newcomer.human_attention.rank, Some(1));
+        assert_eq!(newcomer.attention_rank_trend, RankTrend::Up);
+
+        let fading = summary_for(&summaries, "carlok/fading");
+        assert_eq!(fading.human_attention.score, Some(0.0));
+        assert_eq!(fading.human_attention.rank, None);
+        assert_eq!(fading.attention_rank_trend, RankTrend::Down);
+    }
+
+    #[test]
+    fn a_fork_weighs_the_same_as_a_star() {
+        assert_eq!(
+            attention_score(0, Some(0), Some(1), Some(0)),
+            attention_score(0, Some(0), Some(0), Some(1))
+        );
     }
 
     #[tokio::test]
