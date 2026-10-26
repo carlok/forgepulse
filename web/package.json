@@ -18,13 +18,13 @@
     "@playwright/test": "^1.51.1",
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@types/node": "^22.13.4",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.12",
     "playwright": "^1.51.1",
     "svelte": "^5.20.0",
     "svelte-check": "^4.1.4",
     "typescript": "^5.7.3",
-    "vite": "^6.1.0",
-    "vitest": "^4.1.11"
+    "vite": "^6.4.5",
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.1.2",
