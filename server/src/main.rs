@@ -68,8 +68,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run_healthcheck() -> anyhow::Result<()> {
-    let bind_host =
-        env::var("FORGEPULSE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let bind_host = env::var("FORGEPULSE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let host = healthcheck_host(&bind_host);
     let port = env::var("FORGEPULSE_PORT").unwrap_or_else(|_| "18744".to_string());
     let url = format!("http://{host}:{port}/api/health");
@@ -85,10 +84,7 @@ async fn run_healthcheck() -> anyhow::Result<()> {
     if !response.status().is_success() {
         std::process::exit(1);
     }
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .context("decode /api/health JSON")?;
+    let body: serde_json::Value = response.json().await.context("decode /api/health JSON")?;
     if body.get("status").and_then(|value| value.as_str()) != Some("ok") {
         std::process::exit(1);
     }
@@ -138,7 +134,7 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_sync_interval, healthcheck_host};
+    use super::{healthcheck_host, parse_sync_interval};
 
     #[test]
     fn accepts_hour_and_minute_intervals() {
