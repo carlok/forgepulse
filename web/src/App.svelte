@@ -10,6 +10,7 @@
   import { seriesValues, unionDays } from './lib/charts';
   import { formatUpdatedAt } from './lib/time';
   import { trendPresentation } from './lib/trend';
+  import { buildLabel } from './lib/api';
   import { attentionRankLabel, inBothTopN, NO_SIGNAL_TITLE, showAttentionTrend } from './lib/rank';
 
   let dashboard: Dashboard | null = null;
@@ -30,7 +31,7 @@
   let starEvents: StarEvent[] | null = null;
   const PER_PAGE = 25;
   let page = 1;
-  let gitRef = 'local';
+  let buildInfo = 'local';
   let lastSyncedAt: string | null = null;
   let now = Date.now();
   let refreshing = false;
@@ -51,7 +52,7 @@
 
   onMount(() => {
     void loadCurrentPage();
-    void loadHealth().then((health) => { gitRef = health.git_ref; }).catch(() => {});
+    void loadHealth().then((health) => { buildInfo = buildLabel(health); }).catch(() => {});
     void loadSyncStatus();
     const resize = () => { chart?.resize(); detailChart?.resize(); };
     const popstate = () => {
@@ -320,7 +321,7 @@
         <section class="panel" in:fade={{ duration: 220 }}><div class="panel-title"><div><h2>Every star, newest first</h2><span>{starEvents.length} stored, across all tracked repositories</span></div></div><div class="scroll star-events">{#each starEvents as event (event.repository_name + event.login)}<div class="star-event"><img class="star-avatar" src={event.avatar_url} alt="" width="32" height="32" loading="lazy" /><span><a class="repository-link" href={event.html_url} target="_blank" rel="noreferrer">{event.login}</a> starred <a class="repository-link" href={`/repositories/${event.repository_name}`} on:click={(mouseEvent) => navigate(mouseEvent, () => openRepository(event.repository_name))}>{event.repository_name}</a></span><small title={event.starred_at}>{new Date(event.starred_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</small></div>{:else}<p class="loading">No stars recorded yet.</p>{/each}</div></section>
       {:else}<p class="loading">Loading stars…</p>{/if}
     {:else}
-      <header><div><span class="eyebrow">Analytics console</span><h1>Repositories</h1></div><div class="header-meta"><span class="status">{gitRef}</span>{#if syncStatusText}<span class="sync-status">{syncStatusText}</span>{/if}<div class="sync-actions"><button class="link-button" on:click={refreshView} disabled={refreshing || syncing} title="Reload the currently stored data"><RefreshCw size={11} />Refresh</button><button class="link-button" on:click={syncNow} disabled={refreshing || syncing} title="Pull fresh data from GitHub now">{syncing ? 'Syncing…' : 'Sync now'}</button></div>{#if syncError}<span class="sync-error">{syncError}</span>{/if}</div></header>
+      <header><div><span class="eyebrow">Analytics console</span><h1>Repositories</h1></div><div class="header-meta"><span class="status">{buildInfo}</span>{#if syncStatusText}<span class="sync-status">{syncStatusText}</span>{/if}<div class="sync-actions"><button class="link-button" on:click={refreshView} disabled={refreshing || syncing} title="Reload the currently stored data"><RefreshCw size={11} />Refresh</button><button class="link-button" on:click={syncNow} disabled={refreshing || syncing} title="Pull fresh data from GitHub now">{syncing ? 'Syncing…' : 'Sync now'}</button></div>{#if syncError}<span class="sync-error">{syncError}</span>{/if}</div></header>
       <form on:submit|preventDefault={submitSearch} class="search"><input bind:value={query} placeholder="owner/repository" aria-label="Search repositories" />{#if query}<button type="button" class="secondary" on:click={clearSearch}>Cancel</button>{/if}<button><Search size={14} />Search</button></form>
       {#if error}<p class="error">{error}</p>{/if}
       {#if dashboard}

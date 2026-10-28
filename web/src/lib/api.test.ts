@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { exportUrl, loadDashboard, loadHealth, loadRepository, loadStarEvents, loadSyncRuns, triggerSync } from './api';
+import { buildLabel, exportUrl, loadDashboard, loadHealth, loadRepository, loadStarEvents, loadSyncRuns, triggerSync } from './api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -36,6 +36,11 @@ describe('dashboard API client', () => {
     vi.stubGlobal('fetch', fetchMock);
     await expect(loadHealth()).resolves.toEqual({ status: 'ok', git_ref: 'main@abc1234' });
     expect(fetchMock).toHaveBeenCalledWith('/api/health');
+  });
+
+  it('labels the build with version and commit, or just the commit', () => {
+    expect(buildLabel({ status: 'ok', version: '0.2.0', git_ref: 'main@abc1234' })).toBe('v0.2.0 · main@abc1234');
+    expect(buildLabel({ status: 'ok', git_ref: 'local' })).toBe('local');
   });
 
   it('reports an HTTP error for health', async () => {

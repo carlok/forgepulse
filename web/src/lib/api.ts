@@ -81,7 +81,12 @@ export interface RepositoryDetail {
 
 export interface HealthStatus {
   status: string;
+  version?: string;
   git_ref: string;
+}
+
+export function buildLabel(health: HealthStatus): string {
+  return health.version ? `v${health.version} · ${health.git_ref}` : health.git_ref;
 }
 
 export interface SyncRun {

@@ -75,7 +75,11 @@ pub fn router(state: AppState, web_dir: Option<String>) -> Router {
 
 async fn health() -> Json<serde_json::Value> {
     let git_ref = env::var("FORGEPULSE_GIT_REF").unwrap_or_else(|_| "local".to_string());
-    Json(serde_json::json!({"status": "ok", "git_ref": git_ref}))
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "git_ref": git_ref,
+    }))
 }
 
 async fn dashboard(
@@ -647,6 +651,7 @@ mod tests {
         )
         .expect("json");
         assert_eq!(json["status"], "ok");
+        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
         // Defaults to "local" when FORGEPULSE_GIT_REF isn't set, which is the case in this
         // process — mutating env vars isn't safe to do per-test in a parallel test binary.
         assert_eq!(json["git_ref"], "local");
