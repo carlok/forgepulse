@@ -6,7 +6,7 @@ RUN pnpm install --no-frozen-lockfile
 COPY web/ ./
 RUN pnpm build
 
-FROM rust:1-bookworm AS server-build
+FROM docker.io/library/rust:1-bookworm AS server-build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock* ./
 COPY server/Cargo.toml server/Cargo.toml
@@ -14,18 +14,19 @@ COPY server/src server/src
 COPY server/migrations server/migrations
 RUN cargo build --release --package forgepulse-server
 
-FROM debian:bookworm-slim
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --create-home --uid 10001 forgepulse
-COPY --from=server-build /build/target/release/forgepulse-server /usr/local/bin/forgepulse-server
-COPY --from=web-build /build/web/dist /opt/forgepulse/web
-RUN mkdir -p /data && chown forgepulse:forgepulse /data
-USER forgepulse
+FROM debian:bookworm-slim AS runtime-prep
+RUN mkdir -p /data && chown 65532:65532 /data
+
+FROM gcr.io/distroless/cc-debian12:nonroot
+COPY --from=runtime-prep --chown=65532:65532 /data /data
+COPY --from=server-build --chown=65532:65532 \
+    /build/target/release/forgepulse-server /app/forgepulse-server
+COPY --from=web-build --chown=65532:65532 /build/web/dist /opt/forgepulse/web
 ENV FORGEPULSE_HOST=0.0.0.0 \
     FORGEPULSE_WEB_DIR=/opt/forgepulse/web \
     FORGEPULSE_DB=sqlite:/data/forgepulse.db
 VOLUME ["/data"]
 EXPOSE 18744
-ENTRYPOINT ["/usr/local/bin/forgepulse-server"]
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD ["/app/forgepulse-server", "healthcheck"]
+ENTRYPOINT ["/app/forgepulse-server"]

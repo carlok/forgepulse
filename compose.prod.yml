@@ -20,7 +20,7 @@ services:
     volumes:
       - forgepulse-data:/data
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:18744/api/health"]
+      test: ["CMD", "/app/forgepulse-server", "healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3

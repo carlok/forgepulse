@@ -12,6 +12,9 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+        return run_healthcheck().await;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
@@ -64,6 +67,42 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn run_healthcheck() -> anyhow::Result<()> {
+    let bind_host =
+        env::var("FORGEPULSE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let host = healthcheck_host(&bind_host);
+    let port = env::var("FORGEPULSE_PORT").unwrap_or_else(|_| "18744".to_string());
+    let url = format!("http://{host}:{port}/api/health");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(4))
+        .build()
+        .context("build healthcheck HTTP client")?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    if !response.status().is_success() {
+        std::process::exit(1);
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .context("decode /api/health JSON")?;
+    if body.get("status").and_then(|value| value.as_str()) != Some("ok") {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn healthcheck_host(bind_host: &str) -> &str {
+    if bind_host == "0.0.0.0" || bind_host == "::" {
+        "127.0.0.1"
+    } else {
+        bind_host
+    }
+}
+
 fn sync_interval() -> Duration {
     let raw = env::var("FORGEPULSE_SYNC_INTERVAL").unwrap_or_else(|_| "1h".to_string());
     parse_sync_interval(&raw)
@@ -99,12 +138,19 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_sync_interval;
+    use super::{parse_sync_interval, healthcheck_host};
 
     #[test]
     fn accepts_hour_and_minute_intervals() {
         assert_eq!(parse_sync_interval("2h").as_secs(), 7_200);
         assert_eq!(parse_sync_interval("15m").as_secs(), 900);
         assert_eq!(parse_sync_interval("bad").as_secs(), 3_600);
+    }
+
+    #[test]
+    fn healthcheck_uses_loopback_for_wildcard_bind() {
+        assert_eq!(healthcheck_host("0.0.0.0"), "127.0.0.1");
+        assert_eq!(healthcheck_host("::"), "127.0.0.1");
+        assert_eq!(healthcheck_host("127.0.0.1"), "127.0.0.1");
     }
 }

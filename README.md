@@ -49,6 +49,30 @@ On a Mac with a Podman machine, `scripts/deploy.sh` does the same thing in one s
 
 The server embeds no development source mount. Its static frontend is copied into the production image and is served by the API process. The service is loopback-only by default. Put it behind an HTTPS reverse proxy only if remote access is intentionally required.
 
+The production runtime image is [Distroless](https://github.com/GoogleContainerTools/distroless) (`gcr.io/distroless/cc-debian12:nonroot`): there is no shell, package manager, or `curl`. Container health is checked with `forgepulse-server healthcheck`, which performs an in-process HTTP GET to `/api/health`.
+
+### Debugging the production container
+
+Distroless images cannot be shelled into with `podman exec … sh`. To inspect a running container, use ephemeral debug tooling instead:
+
+```sh
+# Podman 5+ (attach a toolbox with shell and common tools)
+podman debug forgepulse-app
+
+# Docker Desktop / Docker Engine 23+ (temporary debug sidecar)
+docker debug forgepulse-app
+```
+
+From the host, you can still curl the published loopback port, read logs, and inspect health:
+
+```sh
+curl -sf http://127.0.0.1:18744/api/health
+podman logs forgepulse-app
+podman inspect forgepulse-app --format '{{json .State.Health}}'
+```
+
+For a drop-in alternative base with the same layout, [Docker Hardened Images](https://dhi.io/) publish Distroless-compatible variants when your registry provides them without extra authentication.
+
 ## API surface
 
 | Endpoint | Purpose |
