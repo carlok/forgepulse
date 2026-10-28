@@ -51,6 +51,19 @@ The server embeds no development source mount. Its static frontend is copied int
 
 The production runtime image is [Distroless](https://github.com/GoogleContainerTools/distroless) (`gcr.io/distroless/cc-debian12:nonroot`): there is no shell, package manager, or `curl`. Container health is checked with `forgepulse-server healthcheck`, which performs an in-process HTTP GET to `/api/health`.
 
+### Upgrading an existing data volume
+
+The Distroless image runs as uid `65532` (`nonroot`). Images before it ran as uid `10001`, so a data volume created by an older image still belongs to `10001` and the new container cannot write its database. Fresh volumes are unaffected. Re-own an existing volume once, with the app stopped, before the first Distroless deploy (take a backup first; see [Backup and restore](#backup-and-restore)):
+
+```sh
+podman stop forgepulse-app
+podman run --rm --user root -v forgepulse_forgepulse-data:/data \
+  docker.io/library/debian:bookworm-slim chown -R 65532:65532 /data
+scripts/deploy.sh
+```
+
+The volume name is `<compose project>_forgepulse-data`; check it with `podman volume ls`. To roll back to a pre-Distroless image, re-own the volume to `10001:999` the same way.
+
 ### Debugging the production container
 
 Distroless images cannot be shelled into with `podman exec … sh`. To inspect a running container, use ephemeral debug tooling instead:
