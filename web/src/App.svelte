@@ -11,6 +11,7 @@
   import { formatUpdatedAt } from './lib/time';
   import { trendPresentation } from './lib/trend';
   import { buildLabel } from './lib/api';
+  import { loadSkipArchived, saveSkipArchived } from './lib/preferences';
   import { attentionRankLabel, inBothTopN, NO_SIGNAL_TITLE, showAttentionTrend } from './lib/rank';
 
   let dashboard: Dashboard | null = null;
@@ -23,6 +24,7 @@
   let detailChart: echarts.ECharts | undefined;
   let metric: StatisticMetric = 'total';
   let ranking: 'human_attention' | 'clone_volume' = 'human_attention';
+  let skipArchived = loadSkipArchived();
   type SortField = 'stars' | 'total_views' | 'total_clones';
   let sortField: SortField | null = null;
   let sortDir: 'asc' | 'desc' = 'desc';
@@ -132,7 +134,7 @@
   async function refresh() {
     try {
       error = '';
-      dashboard = await loadDashboard(query, page, PER_PAGE, ranking, sortField, sortField ? sortDir : null);
+      dashboard = await loadDashboard(query, page, PER_PAGE, ranking, sortField, sortField ? sortDir : null, !skipArchived);
     } catch (caught) {
       error = caught instanceof Error ? caught.message : 'Could not load analytics';
     }
@@ -198,6 +200,13 @@
 
   function clearSearch() {
     query = '';
+    page = 1;
+    void refresh();
+  }
+
+  function setSkipArchived(next: boolean) {
+    skipArchived = next;
+    saveSkipArchived(next);
     page = 1;
     void refresh();
   }
@@ -297,7 +306,7 @@
     <a class="brand" href="/" on:click={(event) => navigate(event, goHome)}>ForgePulse</a>
     <p>Local repository traffic history, retained beyond the rolling source window.</p>
     <a class="project-link" href="https://github.com/carlok/forgepulse" target="_blank" rel="noreferrer">ForgePulse project<ExternalLink size={13} /></a>
-    {#if !selectedRepository && !showingStars}<a class="button export-link" href={exportUrl(query)}><Download size={14} />Export JSONL</a>{/if}
+    {#if !selectedRepository && !showingStars}<a class="button export-link" href={exportUrl(query, !skipArchived)}><Download size={14} />Export JSONL</a>{/if}
   </aside>
   <section class="content">
     {#if selectedRepository}
@@ -322,7 +331,7 @@
       {:else}<p class="loading">Loading stars…</p>{/if}
     {:else}
       <header><div><span class="eyebrow">Analytics console</span><h1>Repositories</h1></div><div class="header-meta"><span class="status">{buildInfo}</span>{#if syncStatusText}<span class="sync-status">{syncStatusText}</span>{/if}<div class="sync-actions"><button class="link-button" on:click={refreshView} disabled={refreshing || syncing} title="Reload the currently stored data"><RefreshCw size={11} />Refresh</button><button class="link-button" on:click={syncNow} disabled={refreshing || syncing} title="Pull fresh data from GitHub now">{syncing ? 'Syncing…' : 'Sync now'}</button></div>{#if syncError}<span class="sync-error">{syncError}</span>{/if}</div></header>
-      <form on:submit|preventDefault={submitSearch} class="search"><input bind:value={query} placeholder="owner/repository" aria-label="Search repositories" />{#if query}<button type="button" class="secondary" on:click={clearSearch}>Cancel</button>{/if}<button><Search size={14} />Search</button></form>
+      <form on:submit|preventDefault={submitSearch} class="search"><input bind:value={query} placeholder="owner/repository" aria-label="Search repositories" />{#if query}<button type="button" class="secondary" on:click={clearSearch}>Cancel</button>{/if}<button><Search size={14} />Search</button><label class="skip-archived"><input type="checkbox" checked={skipArchived} on:change={(event) => setSkipArchived(event.currentTarget.checked)} />Skip archived</label></form>
       {#if error}<p class="error">{error}</p>{/if}
       {#if dashboard}
         <div class="kpis">

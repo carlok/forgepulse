@@ -24,6 +24,14 @@ describe('dashboard API client', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/dashboard?q=&page=1&per_page=25&ranking=clone_volume&sort=stars&dir=asc');
   });
 
+  it('asks the server to skip archived repositories only when told to', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [] }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await loadDashboard('', 1, 25, 'human_attention', null, null, false);
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/dashboard?q=&page=1&per_page=25&ranking=human_attention&include_archived=false');
+    expect(exportUrl('x', false)).toBe('/api/v1/export.jsonl?q=x&include_archived=false');
+  });
+
   it('loads an encoded repository detail endpoint', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ summary: {} }) });
     vi.stubGlobal('fetch', fetchMock);

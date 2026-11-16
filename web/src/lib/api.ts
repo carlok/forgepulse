@@ -147,11 +147,13 @@ export async function loadDashboard(
   perPage = 25,
   ranking: 'human_attention' | 'clone_volume' = 'human_attention',
   sort: string | null = null,
-  dir: 'asc' | 'desc' | null = null
+  dir: 'asc' | 'desc' | null = null,
+  includeArchived = true
 ): Promise<Dashboard> {
   let url = `/api/v1/dashboard?q=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}&ranking=${ranking}`;
   if (sort) url += `&sort=${encodeURIComponent(sort)}`;
   if (dir) url += `&dir=${dir}`;
+  if (!includeArchived) url += '&include_archived=false';
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Dashboard request failed: ${response.status}`);
   return response.json() as Promise<Dashboard>;
@@ -164,6 +166,6 @@ export async function loadRepository(name: string): Promise<RepositoryDetail> {
   return response.json() as Promise<RepositoryDetail>;
 }
 
-export function exportUrl(query = ''): string {
-  return `/api/v1/export.jsonl?q=${encodeURIComponent(query)}`;
+export function exportUrl(query = '', includeArchived = true): string {
+  return `/api/v1/export.jsonl?q=${encodeURIComponent(query)}${includeArchived ? '' : '&include_archived=false'}`;
 }

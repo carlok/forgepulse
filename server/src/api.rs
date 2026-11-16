@@ -40,6 +40,7 @@ pub struct DashboardQuery {
     pub page: Option<usize>,
     pub per_page: Option<usize>,
     pub ranking: Option<String>,
+    pub include_archived: Option<bool>,
 }
 
 pub fn router(state: AppState, web_dir: Option<String>) -> Router {
@@ -87,7 +88,10 @@ async fn dashboard(
     Query(query): Query<DashboardQuery>,
 ) -> Result<Json<DashboardResponse>, ApiError> {
     let search = query.q.unwrap_or_default();
-    let mut all = state.store.repository_summaries(&search).await?;
+    let mut all = state
+        .store
+        .repository_summaries_scoped(&search, query.include_archived.unwrap_or(true))
+        .await?;
     let chart = state.store.clone_chart(&all).await?;
     let views_chart = state.store.views_chart(&all).await?;
     let total_stars = all.iter().map(|item| item.repository.stars).sum();
@@ -160,7 +164,10 @@ async fn export_jsonl(
 ) -> Result<Response, ApiError> {
     let repositories = state
         .store
-        .repository_summaries(query.q.as_deref().unwrap_or_default())
+        .repository_summaries_scoped(
+            query.q.as_deref().unwrap_or_default(),
+            query.include_archived.unwrap_or(true),
+        )
         .await?;
     let store = state.store.clone();
     let lines = stream::iter(repositories).then(move |repository| {

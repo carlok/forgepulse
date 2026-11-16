@@ -284,6 +284,16 @@ impl Store {
         &self,
         search: &str,
     ) -> anyhow::Result<Vec<RepositorySummary>> {
+        self.repository_summaries_scoped(search, true).await
+    }
+
+    /// Like [`Self::repository_summaries`], optionally leaving archived repositories out of the
+    /// set entirely, so ranks, shares and rank trends are computed without them.
+    pub async fn repository_summaries_scoped(
+        &self,
+        search: &str,
+        include_archived: bool,
+    ) -> anyhow::Result<Vec<RepositorySummary>> {
         // The 1d/7d/30d windows count back from the newest day GitHub has actually reported,
         // not the wall clock — its traffic API lags a day or more, so a wall-clock window is
         // mostly empty at its recent end. Each is capped at that day too, so a stray early
@@ -304,11 +314,12 @@ impl Store {
                  COALESCE(SUM(CASE WHEN d.metric='view' AND d.day BETWEEN date(a.day, '-29 day') AND a.day THEN d.count END), 0) AS views_30d,
                  COALESCE(SUM(CASE WHEN d.metric='view' AND d.day BETWEEN date(a.day, '-6 day') AND a.day THEN d.uniques END), 0) AS unique_views_7d
                FROM repositories r CROSS JOIN anchor a LEFT JOIN daily_traffic d ON d.repository_name=r.name
-               WHERE lower(r.name) LIKE lower(?)
+               WHERE lower(r.name) LIKE lower(?) AND (? OR r.is_archived = 0)
                GROUP BY r.name ORDER BY total_clones DESC, r.name ASC"#,
         )
         .bind(&reference_day)
         .bind(format!("%{}%", search.trim()))
+        .bind(include_archived)
         .fetch_all(&self.pool)
         .await?;
         let names = rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>();
@@ -371,7 +382,7 @@ impl Store {
             });
         }
         assign_human_attention_ranks(&mut summaries);
-        self.apply_rank_trends(&mut summaries, search, &reference_day)
+        self.apply_rank_trends(&mut summaries, search, include_archived, &reference_day)
             .await?;
         Ok(summaries)
     }
@@ -800,6 +811,7 @@ impl Store {
     async fn clone_totals_one_day_before_latest(
         &self,
         search: &str,
+        include_archived: bool,
     ) -> anyhow::Result<BTreeMap<String, (i64, bool)>> {
         let rows: Vec<(String, i64, bool)> = sqlx::query_as(
             r#"WITH latest AS (
@@ -816,10 +828,11 @@ impl Store {
                  FROM repositories r
                  LEFT JOIN daily_traffic d ON d.repository_name=r.name
                  LEFT JOIN latest l ON l.repository_name=r.name
-                 WHERE lower(r.name) LIKE lower(?)
+                 WHERE lower(r.name) LIKE lower(?) AND (? OR r.is_archived = 0)
                  GROUP BY r.name"#,
         )
         .bind(format!("%{}%", search.trim()))
+        .bind(include_archived)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -835,6 +848,7 @@ impl Store {
     async fn attention_scores_as_of(
         &self,
         search: &str,
+        include_archived: bool,
         as_of: &str,
         views_as_of: &str,
     ) -> anyhow::Result<BTreeMap<String, Option<f64>>> {
@@ -842,12 +856,13 @@ impl Store {
             r#"SELECT r.name,
                  COALESCE(SUM(CASE WHEN d.metric='view' AND d.day<=? AND d.day>=date(?, '-6 day') THEN d.uniques END), 0) AS unique_views_7d
                FROM repositories r LEFT JOIN daily_traffic d ON d.repository_name=r.name
-               WHERE lower(r.name) LIKE lower(?)
+               WHERE lower(r.name) LIKE lower(?) AND (? OR r.is_archived = 0)
                GROUP BY r.name"#,
         )
         .bind(views_as_of)
         .bind(views_as_of)
         .bind(format!("%{}%", search.trim()))
+        .bind(include_archived)
         .fetch_all(&self.pool)
         .await?;
         let mut scores = BTreeMap::new();
@@ -868,6 +883,7 @@ impl Store {
         &self,
         summaries: &mut [RepositorySummary],
         search: &str,
+        include_archived: bool,
         reference_day: &str,
     ) -> anyhow::Result<()> {
         let calendar_yesterday = (Utc::now().date_naive() - Duration::days(1)).to_string();
@@ -875,7 +891,9 @@ impl Store {
             .context("parse traffic reference day")?
             - Duration::days(1))
         .to_string();
-        let clone_baseline = self.clone_totals_one_day_before_latest(search).await?;
+        let clone_baseline = self
+            .clone_totals_one_day_before_latest(search, include_archived)
+            .await?;
         let yesterday_clone_ranks = dense_rank_by_total(
             clone_baseline
                 .iter()
@@ -883,7 +901,12 @@ impl Store {
                 .collect(),
         );
         let yesterday_attention_scores = self
-            .attention_scores_as_of(search, &calendar_yesterday, &views_baseline_day)
+            .attention_scores_as_of(
+                search,
+                include_archived,
+                &calendar_yesterday,
+                &views_baseline_day,
+            )
             .await?;
         let yesterday_attention_ranks = dense_rank_by_score(yesterday_attention_scores.clone());
 
@@ -1849,6 +1872,49 @@ mod tests {
         assert_eq!(fading.human_attention.score, Some(0.0));
         assert_eq!(fading.human_attention.rank, None);
         assert_eq!(fading.attention_rank_trend, RankTrend::Down);
+    }
+
+    #[tokio::test]
+    async fn skipping_archived_repositories_drops_them_and_ranks_the_rest() {
+        let (_dir, store) = store_in_tempdir().await;
+        for (name, archived, clones) in [("carlok/old", true, 50), ("carlok/live", false, 5)] {
+            store
+                .upsert_repository(&Repository {
+                    name: name.into(),
+                    description: String::new(),
+                    stars: 0,
+                    forks: 0,
+                    watchers: 0,
+                    issues: 0,
+                    pull_requests: 0,
+                    is_fork: false,
+                    is_archived: archived,
+                    created_at: days_ago(400),
+                    updated_at: days_ago(0),
+                })
+                .await
+                .expect("repository");
+            store
+                .upsert_daily_traffic(name, &days_ago(1), "clone", clones, 1)
+                .await
+                .expect("clones");
+        }
+
+        let all = store
+            .repository_summaries_scoped("", true)
+            .await
+            .expect("all");
+        assert_eq!(all.len(), 2);
+        assert_eq!(summary_for(&all, "carlok/live").clone_rank, 2);
+
+        let active = store
+            .repository_summaries_scoped("", false)
+            .await
+            .expect("active");
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].repository.name, "carlok/live");
+        assert_eq!(active[0].clone_rank, 1);
+        assert_eq!(active[0].clone_share_percent, 100.0);
     }
 
     #[test]
